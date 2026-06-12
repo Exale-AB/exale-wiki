@@ -36,6 +36,7 @@ def test_query_returns_raw_context_with_citations(tmp_path: Path):
     assert isinstance(result, Answer)
     assert result.citations == ("acme-ab",)
     # Raw context should contain the question and the page body
+    assert result.text is not None
     assert "Question: renewal contract" in result.text
     assert "Renewal due 2026-06-20." in result.text
     assert result.filed_slug is None
@@ -69,6 +70,7 @@ def test_query_files_answer_as_page_when_requested(tmp_path: Path):
     assert page is not None
     assert page.frontmatter["type"] == "answer"
     assert page.frontmatter["citations"] == ["acme-ab"]
+    assert result.text is not None
     assert result.text in page.body
 
     assert "(acme-renewal-date)" in repo.read_index()
@@ -143,6 +145,7 @@ def test_query_returns_raw_context_for_agent(tmp_path: Path):
     )
 
     # Should return raw context, not synthesized prose
+    assert result.text is not None
     assert "Question: gmail email setup" in result.text
 
     # Should contain full page bodies (not summaries)

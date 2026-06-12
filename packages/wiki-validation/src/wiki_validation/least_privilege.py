@@ -1,9 +1,9 @@
 """Verify seat skill bundles only request scopes they actually use."""
 
 
-
 class ScopeError(Exception):
     """Scope validation failed."""
+
     pass
 
 
@@ -81,10 +81,12 @@ def verify_seat_least_privilege(
     violations = []
     for scope in requested:
         if scope not in required:
-            violations.append({
-                "scope": scope,
-                "reason": "not required by any enabled bundle",
-            })
+            violations.append(
+                {
+                    "scope": scope,
+                    "reason": "not required by any enabled bundle",
+                }
+            )
 
     compliant = len(violations) == 0
 

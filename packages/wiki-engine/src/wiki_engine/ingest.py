@@ -82,6 +82,7 @@ def ingest(
     date: str | None = None,
     embedder: Embedder | None = None,
     store: VectorStore | None = None,
+    contributor: str | None = None,
 ) -> IngestResult:
     date = date or today()
 
@@ -91,6 +92,8 @@ def ingest(
     if set(source.categories) & set(off_limits):
         return IngestResult(slug=None, excluded=True)
 
+    # Optimistic dedup check before the (costly) summarize. The authoritative re-check
+    # happens inside the write lock below to stay race-safe under concurrency.
     if source.identity() in _manifest_ids(repo):
         return IngestResult(slug=None, skipped=True)
 
@@ -98,43 +101,51 @@ def ingest(
     if not slug:
         raise IngestError(f"source title produces an empty slug: {source.title!r}")
 
-    (repo.raw_dir / f"{source.identity()}.txt").write_text(source.text, encoding="utf-8")
-    _append_manifest(repo, source, date)
-
     summary = summarizer.summarize(source)
-    existing = repo.read_page(slug)
-    page = Page(
-        slug=slug,
-        frontmatter={
+    embedding = embedder.embed([summary])[0] if embedder is not None and store is not None else None
+
+    # Serialize the dedup check + filesystem/git writes so concurrent ingests from
+    # multiple workflows don't race on the manifest/index/log or the git index. The
+    # model calls above are deliberately kept outside the lock.
+    with repo.write_lock():
+        if source.identity() in _manifest_ids(repo):
+            return IngestResult(slug=None, skipped=True)
+
+        (repo.raw_dir / f"{source.identity()}.txt").write_text(source.text, encoding="utf-8")
+        _append_manifest(repo, source, date)
+
+        existing = repo.read_page(slug)
+        frontmatter: dict[str, object] = {
             "title": source.title,
             "type": "source",
             "category": schema.default_category,
             "sources": _merge_sources(existing, source.identifier),
-        },
-        body=summary,
-    )
-    # Validate category is not off-limits before persisting the page
-    page_category = page.frontmatter.get("category", schema.default_category)
-    validate_ingestion_category(page_category, schema.honesty_rules)
-    # Enforce honesty rules before persisting the page
-    enforce_honesty_category(page, schema)
-    repo.write_page(page)
+        }
+        if contributor:
+            frontmatter["contributor"] = contributor
+        page = Page(slug=slug, frontmatter=frontmatter, body=summary)
+        # Validate category is not off-limits before persisting the page
+        page_category = page.frontmatter.get("category", schema.default_category)
+        validate_ingestion_category(page_category, schema.honesty_rules)
+        # Enforce honesty rules before persisting the page
+        enforce_honesty_category(page, schema)
+        repo.write_page(page)
 
-    if embedder is not None and store is not None:
-        store.upsert(slug, embedder.embed([summary])[0])
+        if store is not None and embedding is not None:
+            store.upsert(slug, embedding)
 
-    entries = catalog.upsert_entry(
-        catalog.parse_index(repo.read_index()),
-        catalog.CatalogEntry(
-            title=source.title,
-            slug=slug,
-            category=schema.default_category,
-            summary=(summary.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
-        ),
-    )
-    repo.write_index(catalog.render_index(entries))
+        entries = catalog.upsert_entry(
+            catalog.parse_index(repo.read_index()),
+            catalog.CatalogEntry(
+                title=source.title,
+                slug=slug,
+                category=schema.default_category,
+                summary=(summary.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
+            ),
+        )
+        repo.write_index(catalog.render_index(entries))
 
-    repo.append_log(format_entry(LogEntry(date=date, op="ingest", title=source.title)))
-    repo.commit(f"ingest: {source.title}")
+        repo.append_log(format_entry(LogEntry(date=date, op="ingest", title=source.title)))
+        repo.commit(f"ingest: {source.title}")
 
-    return IngestResult(slug=slug, created=existing is None, updated=existing is not None)
+        return IngestResult(slug=slug, created=existing is None, updated=existing is not None)

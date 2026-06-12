@@ -2,11 +2,36 @@
 
 from __future__ import annotations
 
-from typing import Any
+import sys
+from typing import TYPE_CHECKING, Any
 
-from .protocols import Answerer, Embedder
+from .protocols import Answerer, Embedder, Summarizer
 from .repo import WikiRepo
 from .retrieval import Retriever, VectorStore
+
+if TYPE_CHECKING:
+    from .schema import WikiSchema
+
+
+def load_seat_schema(repo: WikiRepo) -> WikiSchema:
+    """Load the seat rulebook from ``schema/AGENTS.md``.
+
+    Falls back to a default ``WikiSchema`` (and warns) when the file is absent or
+    malformed, so a missing/broken rulebook degrades rather than crashing the MCP.
+    """
+    from .schema import WikiSchema, parse_schema
+
+    path = repo.schema_dir / "AGENTS.md"
+    try:
+        if path.exists():
+            return parse_schema(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - degrade, never crash the MCP
+        print(
+            f"[wiki_engine.mcp_server] schema load failed ({exc}); using default schema",
+            file=sys.stderr,
+            flush=True,
+        )
+    return WikiSchema()
 
 
 def wiki_mcp_tools() -> list[dict[str, Any]]:
@@ -66,12 +91,79 @@ def wiki_mcp_tools() -> list[dict[str, Any]]:
                             "The wiki category to ingest into (e.g., 'email', 'process', 'faq')"
                         ),
                     },
+                    "contributor": {
+                        "type": "string",
+                        "description": (
+                            "Optional: which workflow/bundle/person added this source "
+                            "(recorded as provenance on the page)"
+                        ),
+                    },
                 },
                 "required": ["category"],
                 "anyOf": [
                     {"required": ["source_text"]},
                     {"required": ["source_url"]},
                 ],
+            },
+        },
+        {
+            "name": "wiki_context",
+            "description": (
+                "Retrieve ranked raw context (page snippets + citations) for a query "
+                "WITHOUT synthesizing an answer — fast grounding material for a "
+                "workflow to reason over itself. Use this instead of wiki_query when "
+                "you want context, not a finished answer."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to retrieve context about",
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Max pages to consider (default: 5)",
+                        "default": 5,
+                    },
+                    "token_budget": {
+                        "type": "integer",
+                        "description": "Approx token cap on returned context (default: 2000)",
+                        "default": 2000,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "wiki_search",
+            "description": (
+                "Ranked search hits (slug, title, summary, score) with NO page bodies "
+                "and no synthesis — cheap way to check whether a page already exists or "
+                "to browse. Use before wiki_ingest to avoid duplicates."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search terms"},
+                    "k": {
+                        "type": "integer",
+                        "description": "Max hits to return (default: 10)",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "wiki_get",
+            "description": "Fetch a single wiki page by slug (full frontmatter + body).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "slug": {"type": "string", "description": "The page slug to fetch"},
+                },
+                "required": ["slug"],
             },
         },
         {
@@ -117,6 +209,7 @@ def handle_wiki_query(
     Returns:
         Dict with "answer" (str) and "citations" (list of page slugs)
     """
+    from .llm_backends import HermesAnswerer
     from .query import query as query_wiki
 
     retriever = Retriever(repo=repo, store=vectorstore, embedder=embedder)
@@ -129,9 +222,127 @@ def handle_wiki_query(
         file_as="Query Result" if file_as_new_page else None,
     )
 
+    model_backed = isinstance(answerer, HermesAnswerer)
     return {
         "answer": answer.text,
         "citations": list(answer.citations),
+        "mode": "model" if model_backed else "fake",
+        "degraded": not model_backed,
+    }
+
+
+_CHARS_PER_TOKEN = 4  # crude estimate; T08 replaces this with real chunk-level budgeting
+
+
+def handle_wiki_context(
+    repo: WikiRepo,
+    query: str,
+    *,
+    vectorstore: VectorStore,
+    embedder: Embedder,
+    k: int = 5,
+    token_budget: int = 2000,
+) -> dict[str, Any]:
+    """Return ranked raw context for a query — no synthesis, no LLM call.
+
+    Retrieves the top pages, packs their bodies under ``token_budget`` (preferring
+    whole pages, in rank order), and returns the snippets plus their citations. This
+    is the cheap "give my workflow grounding context" primitive; ``wiki_query`` is
+    for when you want a synthesized answer instead.
+
+    Returns:
+        Dict with "context" (list of {slug, title, heading, text, score}) and
+        "citations" (unique slugs, in order).
+    """
+    from .chunk import chunk_page
+
+    retriever = Retriever(repo=repo, store=vectorstore, embedder=embedder)
+    slugs = retriever.retrieve(query, k=k)
+    tokens = {t for t in query.lower().split() if t}
+
+    budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
+    context: list[dict[str, Any]] = []
+    used = 0
+    for slug in slugs:
+        page = repo.read_page(slug)
+        if page is None:
+            continue
+        title = page.frontmatter.get("title", slug)
+        for ch in chunk_page(slug, page.body):
+            if context and used + len(ch.text) > budget_chars:
+                return _context_result(context)
+            text = ch.text
+            if not context and budget_chars and len(text) > budget_chars:
+                text = text[:budget_chars]  # always return at least the top chunk
+            score = sum(1 for t in tokens if t in text.lower())
+            context.append(
+                {"slug": slug, "title": title, "heading": ch.heading, "text": text, "score": score}
+            )
+            used += len(text)
+
+    return _context_result(context)
+
+
+def _context_result(context: list[dict[str, Any]]) -> dict[str, Any]:
+    citations: list[str] = []
+    for item in context:
+        if item["slug"] not in citations:
+            citations.append(item["slug"])
+    return {"context": context, "citations": citations}
+
+
+def handle_wiki_search(
+    repo: WikiRepo,
+    query: str,
+    *,
+    vectorstore: VectorStore,
+    embedder: Embedder,
+    k: int = 10,
+) -> dict[str, Any]:
+    """Ranked hits with catalog metadata — no synthesis, no page bodies.
+
+    The cheap "does a page about X already exist?" / browse primitive. Pairs with
+    wiki_ingest: search first, only ingest when nothing relevant exists.
+
+    Returns:
+        Dict with "results": [{slug, title, summary, category, score}] (ranked).
+    """
+    from . import catalog
+
+    retriever = Retriever(repo=repo, store=vectorstore, embedder=embedder)
+    slugs = retriever.retrieve(query, k=k)
+    entries = {e.slug: e for e in catalog.parse_index(repo.read_index())}
+    tokens = {t for t in query.lower().split() if t}
+
+    results: list[dict[str, Any]] = []
+    for slug in slugs:
+        entry = entries.get(slug)
+        if entry is not None:
+            title, summary, category = entry.title, entry.summary, entry.category
+        else:
+            page = repo.read_page(slug)
+            title = page.frontmatter.get("title", slug) if page else slug
+            summary = ""
+            category = page.frontmatter.get("category", "") if page else ""
+        score = sum(1 for t in tokens if t in f"{title} {summary}".lower())
+        results.append(
+            {"slug": slug, "title": title, "summary": summary, "category": category, "score": score}
+        )
+
+    return {"results": results}
+
+
+def handle_wiki_get(repo: WikiRepo, slug: str) -> dict[str, Any]:
+    """Fetch a single page by slug (full frontmatter + body), or report not-found."""
+    page = repo.read_page(slug)
+    if page is None:
+        return {"found": False, "slug": slug}
+    return {
+        "found": True,
+        "slug": page.slug,
+        "title": page.frontmatter.get("title", page.slug),
+        "frontmatter": dict(page.frontmatter),
+        "body": page.body,
     }
 
 
@@ -141,6 +352,10 @@ def handle_wiki_ingest(
     source_url: str | None,
     category: str,
     schema: Any = None,
+    summarizer: Summarizer | None = None,
+    embedder: Embedder | None = None,
+    store: VectorStore | None = None,
+    contributor: str | None = None,
 ) -> dict[str, Any]:
     """Ingest a source into the wiki.
 
@@ -150,20 +365,27 @@ def handle_wiki_ingest(
         source_url: URL to ingest from
         category: Wiki category
         schema: WikiSchema for validation (optional)
+        summarizer: Summarizer for the page body (defaults to FakeSummarizer)
+        embedder: Embedder for the vector index (optional; with ``store``)
+        store: Vector store to upsert the page embedding into (optional)
 
     Returns:
-        Dict with "slug", "title", and "sources_merged" count
+        Dict with "slug", "title", "status", and "sources_merged" count
     """
+    import hashlib
+
     from .fakes import FakeSummarizer
     from .ingest import ingest
-    from .schema import WikiSchema
     from .source import Source, SourceKind
 
     # Determine source kind and create Source
     if source_text:
+        # Content-addressed identifier so re-ingesting identical text dedupes.
+        # (Previously used id(source_text), a memory address, which broke dedup.)
+        text_digest = hashlib.sha256(source_text.encode("utf-8")).hexdigest()[:16]
         source = Source(
             kind=SourceKind.MESSAGE,
-            identifier=f"mcp-text-{id(source_text)}",
+            identifier=f"text:{text_digest}",
             text=source_text,
             title=source_text.split("\n")[0][:80],
             categories=(category,),
@@ -179,16 +401,26 @@ def handle_wiki_ingest(
     else:
         raise ValueError("Either source_text or source_url must be provided")
 
-    # Use provided schema or create a default one
+    # Load the seat rulebook (off_limits, allowed kinds, honesty) and keep the
+    # per-ingest category as the page's category by overriding default_category.
     if schema is None:
-        schema = WikiSchema(default_category=category)
+        from dataclasses import replace
 
-    # Use FakeSummarizer for now (no LLM available in handler)
+        schema = replace(load_seat_schema(repo), default_category=category)
+
+    from .llm_backends import HermesSummarizer
+
+    active_summarizer = summarizer or FakeSummarizer()
+    off_limits = list(schema.honesty_rules.get("off_limits_categories", []))
     result = ingest(
         source=source,
         repo=repo,
         schema=schema,
-        summarizer=FakeSummarizer(),
+        summarizer=active_summarizer,
+        off_limits=off_limits,
+        embedder=embedder,
+        store=store,
+        contributor=contributor,
     )
 
     # Read the page to get the sources_merged count
@@ -198,10 +430,23 @@ def handle_wiki_ingest(
     else:
         sources_merged = 0
 
+    if result.excluded:
+        status = "excluded"
+    elif result.skipped:
+        status = "skipped"
+    elif result.created:
+        status = "created"
+    elif result.updated:
+        status = "updated"
+    else:
+        status = "unknown"
+
     return {
         "slug": result.slug or "",
         "title": source.title,
+        "status": status,
         "sources_merged": sources_merged,
+        "mode": "model" if isinstance(active_summarizer, HermesSummarizer) else "fake",
     }
 
 
@@ -221,11 +466,10 @@ def handle_wiki_lint(
         Dict with "violations" (list of dicts) and "suggestions" (list of dicts)
     """
     from .lint import lint, suggest_refinements
-    from .schema import WikiSchema
 
-    # Use provided schema or create a default one
+    # Use the seat rulebook (thresholds, honesty rules) unless one is injected.
     if schema is None:
-        schema = WikiSchema()
+        schema = load_seat_schema(repo)
 
     violations_list = lint(repo, schema=schema)
     violations_filtered = [v for v in violations_list if v.confidence >= confidence_threshold]

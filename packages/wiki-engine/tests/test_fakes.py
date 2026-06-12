@@ -52,5 +52,6 @@ def test_fake_embedder_embeds_each_text_independently():
 
 def test_fake_answerer_uses_question_and_context():
     answer = FakeAnswerer().answer("What is the renewal date?", ["page A body", "page B body"])
+    assert answer is not None
     assert "renewal" in answer.lower()
     assert "page A body" in answer

@@ -33,3 +33,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Tooling output (knowledge-graph build artifacts, not part of the project)
+graphify-out/
