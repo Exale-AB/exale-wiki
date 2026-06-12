@@ -213,6 +213,7 @@ def test_structural_contradiction_rule():
 @pytest.mark.unit
 def test_semantic_contradiction_rule():
     """semantic_contradiction detects conflicting claims via embeddings."""
+    from wiki_engine.fakes import FakeEmbedder
     from wiki_engine.lint import semantic_contradiction
     from wiki_engine.page import Page
     from wiki_engine.repo import WikiRepo
@@ -225,12 +226,15 @@ def test_semantic_contradiction_rule():
 
     schema = WikiSchema()
 
-    # With FakeEmbedder, we need to seed it with known similarities
-    # For now, test with None embedder (should return empty)
-    violations = semantic_contradiction(repo, schema, embedder=None)
-
     # With no embedder, should return empty list
-    assert len(violations) == 0
+    assert semantic_contradiction(repo, schema, embedder=None) == []
+
+    # With a real (batch) embedder the rule runs end-to-end without crashing and
+    # produces a real dot-product similarity. This exercises the embed() path —
+    # a regression guard for the per-text vs. batch embedder contract.
+    violations = semantic_contradiction(repo, schema, embedder=FakeEmbedder())
+    assert all(isinstance(v.metadata["similarity"], float) for v in violations)
+    assert all(v.rule == "semantic_contradiction" for v in violations)
 
 
 @pytest.mark.unit
@@ -325,6 +329,7 @@ def test_dead_source_urls_rule():
 @pytest.mark.unit
 def test_duplicate_content_rule():
     """duplicate_content detects pages with near-identical content."""
+    from wiki_engine.fakes import FakeEmbedder
     from wiki_engine.lint import duplicate_content
     from wiki_engine.page import Page
     from wiki_engine.repo import WikiRepo
@@ -340,11 +345,14 @@ def test_duplicate_content_rule():
 
     schema = WikiSchema()
 
-    # With no embedder, should return empty list
-    violations = duplicate_content(repo, schema, embedder=None)
-
     # With no embedder, returns empty
-    assert len(violations) == 0
+    assert duplicate_content(repo, schema, embedder=None) == []
+
+    # With a real (batch) embedder, the two identical pages are flagged as
+    # duplicates. Regression guard: the old per-text embed() call crashed here.
+    violations = duplicate_content(repo, schema, embedder=FakeEmbedder(), threshold=0.8)
+    flagged = {frozenset(v.affected_pages) for v in violations}
+    assert frozenset({"page_x", "page_y"}) in flagged
 
 
 @pytest.mark.unit
@@ -583,10 +591,10 @@ def test_lint_uses_schema_duplicate_similarity_threshold():
     repo.write_page(Page(slug="page_a", frontmatter={}, body="Content A"))
     repo.write_page(Page(slug="page_b", frontmatter={}, body="Content B"))
 
-    # Mock embedder that returns vectors that dot product to 0.85
-    # Vector [0.92] dot vector [0.92] = 0.8464 ≈ 0.85
-    def mock_embed(text):
-        return [0.92]  # Both pages get same embedding -> high similarity
+    # Batch embedder (real protocol: embed(texts) -> list[list[float]]) where
+    # every text maps to the same vector. [0.92] dot [0.92] = 0.8464 ≈ 0.85.
+    def mock_embed(texts):
+        return [[0.92] for _ in texts]
 
     mock_embedder = MagicMock()
     mock_embedder.embed = mock_embed
@@ -629,9 +637,10 @@ def test_duplicate_content_uses_default_threshold_when_schema_has_no_threshold()
     repo.write_page(Page(slug="page_a", frontmatter={}, body="Content A"))
     repo.write_page(Page(slug="page_b", frontmatter={}, body="Content B"))
 
-    # Mock embedder that returns vectors dotting to ~0.85
-    def mock_embed(text):
-        return [0.92]
+    # Batch embedder (real protocol: embed(texts) -> list[list[float]]) where
+    # every text maps to the same vector dotting to ~0.85.
+    def mock_embed(texts):
+        return [[0.92] for _ in texts]
 
     mock_embedder = MagicMock()
     mock_embedder.embed = mock_embed

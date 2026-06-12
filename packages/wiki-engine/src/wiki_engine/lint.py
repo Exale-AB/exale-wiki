@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .embedder import Embedder  # type: ignore[import-not-found]
+    from .protocols import Embedder
     from .repo import WikiRepo
     from .schema import WikiSchema
 
@@ -211,9 +211,8 @@ def semantic_contradiction(
     # Compare each pair of pages for semantic contradiction
     for i, page_a in enumerate(pages_to_check):
         for page_b in pages_to_check[i + 1 :]:
-            # Embed summaries of both pages
-            embedding_a = embedder.embed(page_a.body[:500])  # Use first 500 chars
-            embedding_b = embedder.embed(page_b.body[:500])
+            # Embed summaries of both pages (first 500 chars), batched
+            embedding_a, embedding_b = embedder.embed([page_a.body[:500], page_b.body[:500]])
 
             # Calculate similarity (dot product)
             similarity = sum(a * b for a, b in zip(embedding_a, embedding_b, strict=False))
@@ -413,9 +412,8 @@ def duplicate_content(
     # Compare each pair of pages
     for i, page_a in enumerate(pages_to_check):
         for page_b in pages_to_check[i + 1 :]:
-            # Embed page content
-            embedding_a = embedder.embed(page_a.body)
-            embedding_b = embedder.embed(page_b.body)
+            # Embed page content, batched
+            embedding_a, embedding_b = embedder.embed([page_a.body, page_b.body])
 
             # Calculate similarity (dot product)
             similarity = sum(a * b for a, b in zip(embedding_a, embedding_b, strict=False))
