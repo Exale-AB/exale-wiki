@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from . import catalog
-from .log import LogEntry, format_entry, today
+from .log import LogEntry, today
 from .page import Page
 from .protocols import Answerer
 from .repo import WikiRepo
@@ -94,25 +94,21 @@ def _file_answer(
     repo: WikiRepo, title: str, text: str, citations: tuple[str, ...], date: str
 ) -> str:
     slug = slugify(title)
-    # Serialize with concurrent ingests/filings (shared index.md/log.md + git).
-    with repo.write_lock():
-        repo.write_page(
+    with repo.transaction(f"query: {title}") as txn:
+        txn.put_page(
             Page(
                 slug=slug,
                 frontmatter={"title": title, "type": "answer", "citations": list(citations)},
                 body=text,
             )
         )
-        entries = catalog.upsert_entry(
-            catalog.parse_index(repo.read_index()),
+        txn.catalog(
             catalog.CatalogEntry(
                 title=title,
                 slug=slug,
                 category=_FILED_CATEGORY,
                 summary=(text.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
-            ),
+            )
         )
-        repo.write_index(catalog.render_index(entries))
-        repo.append_log(format_entry(LogEntry(date=date, op="query", title=title)))
-        repo.commit(f"query: {title}")
+        txn.log(LogEntry(date=date, op="query", title=title))
     return slug

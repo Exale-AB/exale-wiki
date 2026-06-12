@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from . import catalog
 from .errors import IngestError
-from .log import LogEntry, format_entry, today
+from .log import LogEntry, today
 from .page import Page
 from .protocols import Embedder, Summarizer
 from .repo import WikiRepo
@@ -102,8 +102,9 @@ def ingest(
     # Serialize the dedup check + filesystem/git writes so concurrent ingests from
     # multiple workflows don't race on the manifest/index/log or the git index. The
     # model calls above are deliberately kept outside the lock.
-    with repo.write_lock():
+    with repo.transaction(f"ingest: {source.title}") as txn:
         if source.identity() in _manifest_ids(repo):
+            txn.abort()
             return IngestResult(slug=None, skipped=True)
 
         (repo.raw_dir / f"{source.identity()}.txt").write_text(source.text, encoding="utf-8")
@@ -119,25 +120,20 @@ def ingest(
         if contributor:
             frontmatter["contributor"] = contributor
         page = Page(slug=slug, frontmatter=frontmatter, body=summary)
-        # Enforce the full page ruleset (type/category/honesty) before persisting.
         schema.enforce_page(page)
-        repo.write_page(page)
+        txn.put_page(page)
 
         if store is not None and embedding is not None:
             store.upsert(slug, embedding)
 
-        entries = catalog.upsert_entry(
-            catalog.parse_index(repo.read_index()),
+        txn.catalog(
             catalog.CatalogEntry(
                 title=source.title,
                 slug=slug,
                 category=schema.default_category,
                 summary=(summary.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
-            ),
+            )
         )
-        repo.write_index(catalog.render_index(entries))
-
-        repo.append_log(format_entry(LogEntry(date=date, op="ingest", title=source.title)))
-        repo.commit(f"ingest: {source.title}")
+        txn.log(LogEntry(date=date, op="ingest", title=source.title))
 
         return IngestResult(slug=slug, created=existing is None, updated=existing is not None)
