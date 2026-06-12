@@ -1,0 +1,104 @@
+"""The query operation: retrieve -> format raw context -> (optionally) file.
+
+The wiki returns RAW context, not synthesized answers. The calling agent (Hermes)
+is responsible for reading the context and synthesizing the final response.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from . import catalog
+from .log import LogEntry, format_entry, today
+from .page import Page
+from .protocols import Answerer
+from .repo import WikiRepo
+from .retrieval import Retriever
+from .slug import slugify
+
+__all__ = ["Answer", "query"]
+
+_SUMMARY_LINE_MAX = 120
+_FILED_CATEGORY = "Answers"
+
+
+@dataclass(frozen=True)
+class Answer:
+    """Query result containing raw context for agent synthesis.
+
+    Attributes:
+        text: Raw context formatted for the agent, or None if no context found
+        citations: Tuple of page slugs that were retrieved
+        filed_slug: Optional slug if the answer was filed as a new page
+    """
+
+    text: str | None
+    citations: tuple[str, ...]
+    filed_slug: str | None = None
+
+
+def query(
+    question: str,
+    *,
+    retriever: Retriever,
+    answerer: Answerer,
+    repo: WikiRepo,
+    k: int = 5,
+    file_as: str | None = None,
+    date: str | None = None,
+) -> Answer:
+    """Query the wiki and return raw context for the agent to synthesize from.
+
+    The wiki is a knowledge base, not a synthesizer. This function retrieves
+    relevant pages and formats them as raw context. The calling agent (Hermes)
+    is responsible for reading the context and generating the final response.
+
+    Args:
+        question: The user's query
+        retriever: Retriever for finding relevant pages
+        answerer: Answerer for formatting raw context
+        repo: Wiki repository
+        k: Number of pages to retrieve (default: 5)
+        file_as: Optional title to file the answer as a new page
+        date: Optional date for the log entry (defaults to today)
+
+    Returns:
+        Answer with raw context text, citations, and optional filed_slug
+    """
+    slugs = retriever.retrieve(question, k=k)
+    found = [(slug, page) for slug in slugs if (page := repo.read_page(slug)) is not None]
+    context = [page.body for _, page in found]
+    citations = tuple(slug for slug, _ in found)
+    text = answerer.answer(question, context)
+
+    filed_slug = None
+    if file_as is not None and text is not None:
+        filed_slug = _file_answer(repo, file_as, text, citations, date or today())
+
+    return Answer(text=text, citations=citations, filed_slug=filed_slug)
+
+
+def _file_answer(
+    repo: WikiRepo, title: str, text: str, citations: tuple[str, ...], date: str
+) -> str:
+    slug = slugify(title)
+    repo.write_page(
+        Page(
+            slug=slug,
+            frontmatter={"title": title, "type": "answer", "citations": list(citations)},
+            body=text,
+        )
+    )
+    entries = catalog.upsert_entry(
+        catalog.parse_index(repo.read_index()),
+        catalog.CatalogEntry(
+            title=title,
+            slug=slug,
+            category=_FILED_CATEGORY,
+            summary=(text.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
+        ),
+    )
+    repo.write_index(catalog.render_index(entries))
+    repo.append_log(format_entry(LogEntry(date=date, op="query", title=title)))
+    repo.commit(f"query: {title}")
+    return slug

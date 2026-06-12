@@ -1,0 +1,82 @@
+# Exale Wiki — uv workspace root.
+#
+# This root is a *virtual* project (not built or installed). It owns the shared
+# tool configuration and the dev dependency set; the real code lives in the
+# workspace members under packages/*.
+#
+# Extracted from the Exale platform monorepo. Holds the Self-Improving Knowledge
+# Wiki: the pure-Python engine plus its logging and validation helpers.
+
+[project]
+name = "exale-wiki-workspace"
+version = "0"
+description = "Exale Self-Improving Knowledge Wiki (workspace root)."
+# Pinned to 3.11 to match the Hermes runtime: thin skill bundles import these
+# packages inside Hermes' Python 3.11 interpreter.
+requires-python = ">=3.11"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+wiki-engine = { workspace = true }
+wiki-utils = { workspace = true }
+wiki-validation = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "pyright>=1.1.390",
+    "types-pyyaml>=6.0",  # type stubs for PyYAML (pyright)
+    # Members are installed editable into the shared venv so tests and
+    # coverage see them by their import names.
+    "wiki-engine",
+    "wiki-utils",
+    "wiki-validation",
+]
+
+# --- Lint & format -----------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["packages"]
+
+[tool.ruff.lint]
+# A sensible, not-overbearing default set: pycodestyle, pyflakes, isort,
+# pyupgrade, bugbear, comprehensions, simplify.
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wiki_engine", "wiki_utils", "wiki_validation"]
+
+# --- Type checking -----------------------------------------------------------
+[tool.pyright]
+include = ["packages"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+# --- Tests -------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+addopts = "--cov --cov-report=term-missing --cov-report=xml --cov-config=pyproject.toml"
+markers = [
+    "unit: pure-Python unit tests with no external dependencies",
+    "integration: drives real Hermes/Docker; excluded from the per-push unit run",
+]
+
+# --- Coverage: the 80% gate on packages/ -------------------------------------
+[tool.coverage.run]
+branch = true
+source_pkgs = ["wiki_engine", "wiki_utils", "wiki_validation"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

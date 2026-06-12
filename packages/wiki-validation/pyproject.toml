@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wiki-validation"
+version = "1.0.0"
+description = "Wiki validation: off-limits, least-privilege, encryption checks."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wiki_validation"]

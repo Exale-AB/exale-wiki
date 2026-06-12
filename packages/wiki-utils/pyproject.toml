@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wiki-utils"
+version = "0.1.0"
+description = "Wiki logging utilities for P7 bundles"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=9.0.0", "pytest-cov>=7.0.0"]

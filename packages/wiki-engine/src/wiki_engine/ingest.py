@@ -1,0 +1,140 @@
+"""The ingest operation: source -> summary page + index/log updates.
+
+Idempotent (dedup by source identity) and off-limits-aware. The single judgment
+step (summarize) is injected; everything else is deterministic bookkeeping.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from . import catalog
+from .errors import IngestError
+from .log import LogEntry, format_entry, today
+from .page import Page
+from .protocols import Embedder, Summarizer
+from .repo import WikiRepo
+from .retrieval import VectorStore
+from .schema import (
+    WikiSchema,
+    enforce_honesty_category,
+    enforce_source_kind,
+    validate_ingestion_category,
+)
+from .slug import slugify
+from .source import Source
+
+__all__ = ["IngestResult", "ingest"]
+
+_MANIFEST = "manifest.jsonl"
+_SUMMARY_LINE_MAX = 120
+
+
+@dataclass(frozen=True)
+class IngestResult:
+    slug: str | None
+    created: bool = False
+    updated: bool = False
+    skipped: bool = False
+    excluded: bool = False
+
+
+def _manifest_ids(repo: WikiRepo) -> set[str]:
+    path = repo.raw_dir / _MANIFEST
+    if not path.exists():
+        return set()
+    return {
+        json.loads(line)["id"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def _append_manifest(repo: WikiRepo, source: Source, date: str) -> None:
+    record = {
+        "id": source.identity(),
+        "kind": str(source.kind),
+        "identifier": source.identifier,
+        "title": source.title,
+        "date": date,
+    }
+    path = repo.raw_dir / _MANIFEST
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _merge_sources(existing: Page | None, identifier: str) -> list[str]:
+    prior = list(existing.frontmatter.get("sources", [])) if existing else []
+    if identifier in prior:
+        return prior
+    return [*prior, identifier]
+
+
+def ingest(
+    source: Source,
+    *,
+    repo: WikiRepo,
+    schema: WikiSchema,
+    summarizer: Summarizer,
+    off_limits: Iterable[str] = (),
+    date: str | None = None,
+    embedder: Embedder | None = None,
+    store: VectorStore | None = None,
+) -> IngestResult:
+    date = date or today()
+
+    # Enforce schema rules before proceeding with ingest
+    enforce_source_kind(str(source.kind), schema)
+
+    if set(source.categories) & set(off_limits):
+        return IngestResult(slug=None, excluded=True)
+
+    if source.identity() in _manifest_ids(repo):
+        return IngestResult(slug=None, skipped=True)
+
+    slug = slugify(source.title)
+    if not slug:
+        raise IngestError(f"source title produces an empty slug: {source.title!r}")
+
+    (repo.raw_dir / f"{source.identity()}.txt").write_text(source.text, encoding="utf-8")
+    _append_manifest(repo, source, date)
+
+    summary = summarizer.summarize(source)
+    existing = repo.read_page(slug)
+    page = Page(
+        slug=slug,
+        frontmatter={
+            "title": source.title,
+            "type": "source",
+            "category": schema.default_category,
+            "sources": _merge_sources(existing, source.identifier),
+        },
+        body=summary,
+    )
+    # Validate category is not off-limits before persisting the page
+    page_category = page.frontmatter.get("category", schema.default_category)
+    validate_ingestion_category(page_category, schema.honesty_rules)
+    # Enforce honesty rules before persisting the page
+    enforce_honesty_category(page, schema)
+    repo.write_page(page)
+
+    if embedder is not None and store is not None:
+        store.upsert(slug, embedder.embed([summary])[0])
+
+    entries = catalog.upsert_entry(
+        catalog.parse_index(repo.read_index()),
+        catalog.CatalogEntry(
+            title=source.title,
+            slug=slug,
+            category=schema.default_category,
+            summary=(summary.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
+        ),
+    )
+    repo.write_index(catalog.render_index(entries))
+
+    repo.append_log(format_entry(LogEntry(date=date, op="ingest", title=source.title)))
+    repo.commit(f"ingest: {source.title}")
+
+    return IngestResult(slug=slug, created=existing is None, updated=existing is not None)

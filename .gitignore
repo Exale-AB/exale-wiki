@@ -1,0 +1,35 @@
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+dist/
+build/
+*.egg-info/
+# uv.lock IS tracked — do not ignore it.
+
+# Node (MCP servers)
+node_modules/
+*.tsbuildinfo
+.cache/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
