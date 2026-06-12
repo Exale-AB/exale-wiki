@@ -400,13 +400,36 @@ S3 and S4 are independent of each other once S2 lands.
 
 ## 10. MemGraphRAG Reuse Map
 
-| MemGraphRAG component | Our adaptation |
-|----------------------|----------------|
-| `RELATION_EXTRACTION_SYSTEM_PROMPT` | Reused verbatim in `extraction.py` |
-| `conflict_detection` + `conflict_resolution` prompts | Adapted for `HermesConflictResolver` |
-| `ThreeLayerMemory` dedup pattern | `WikiGraph.update()` vertex dedup logic |
-| `EmbeddingStore` hash-based dedup | Not needed (page slugs are natural keys) |
-| `ontology_filtering` frequency filter | `WikiGraph.stats` + lint rule confidence weighting |
-| `Memgraphrag.retrieve` PPR flow | `Retriever._graph_retrieve` + `WikiGraph.ppr` |
-| spaCy entity extraction | `SpacyNerLlmExtractor` step 1 |
-| igraph graph construction | `WikiGraph` (GraphML persistence instead of in-memory only) |
+Maximize reuse from `github.com/XMUDeepLIT/MemGraphRAG`. Port code directly
+where possible; adapt only where our DI seam pattern or markdown-native storage
+requires it.
+
+### Direct ports (copy + adapt)
+
+| MemGraphRAG file | What to port | Our target file | Adaptation needed |
+|-----------------|-------------|----------------|-------------------|
+| `src/prompt.py` | `RELATION_EXTRACTION_SYSTEM_PROMPT`, `RELATION_EXTRACTION_USER_PROMPT_TEMPLATE`, `PROMPT['conflict_detection']`, `PROMPT['conflict_resolution']` | `extraction.py`, `conflicts.py` | Minimal — change output parsing to match our `Fact` NamedTuple |
+| `src/memory.py` | `SchemaNode`, `FactNode`, `PassageNode` dataclasses, `_get_or_create_schema/fact/passage` dedup logic, `build_from_openie_results` traversal pattern | `knowledge_graph.py` | Adapt from parallel-list storage to igraph vertices; dedup logic reused almost verbatim |
+| `src/entity_type_extract.py` | `EntityExtractor` class — chunking + spaCy NER + entity filtering (excluded labels set) | `extraction.py` | Remove file I/O; wire to our `FactExtractor` protocol; run on summary text not raw chunks |
+| `src/schema_fact_extract.py` | `RelationExtractor.extract_relations_from_chunk()`, `ChunkWithEntities`, `TripleWithSchema` dataclasses, entity filtering logic | `extraction.py` | Replace `LLMClient` with our `OpenAICompatibleClient`; map `RelationTriple` to our `Fact` |
+| `src/resolve_conflict.py` | `detect_triple_conflicts()` — entity grouping + embedding similarity filter + LLM classification; resolution flow | `conflicts.py` | Replace their embedding model with our `Embedder` protocol; replace their LLM client with `OpenAICompatibleClient` |
+| `src/ontology_filtering.py` | Low-frequency ontology pruning logic | `knowledge_graph.py` | Port as `WikiGraph._prune_rare_schemas(min_frequency)` |
+
+### Structural reuse (pattern, not code)
+
+| MemGraphRAG pattern | Our usage |
+|--------------------|-----------|
+| `Memgraphrag.retrieve()` — fact scoring → PPR → dense fallback | `Retriever._graph_retrieve()` — same flow, using igraph PPR |
+| `EmbeddingStore` — hash-based dedup, parquet persistence | Not needed (page slugs are natural keys, pgvector handles persistence) |
+| `Memgraphrag.build_graph()` — igraph construction with entity/fact/passage nodes | `WikiGraph.rebuild()` — same vertex/edge types, GraphML persistence |
+| Three-layer bidirectional traversal (`get_facts_by_passage`, etc.) | igraph neighbor queries (more efficient than index lists) |
+
+### Not reused
+
+| Component | Reason |
+|-----------|--------|
+| `llm_client.py` (SQLite cache, httpx client) | We have `OpenAICompatibleClient` via Hermes; caching belongs in Hermes layer |
+| `prompt_builder.py` | Simple string formatting; our prompts are inline constants |
+| `embedding_model/` | We have `Embedder` protocol + `FakeEmbedder` / pgvector |
+| `evaluation/` | Benchmark-specific; not applicable to per-seat wiki |
+| `rerank.py` (DSPyFilter) | Adds DSPy dependency; RRF fusion is simpler and sufficient |
