@@ -139,7 +139,7 @@ def test_wiki_mcp_tools_have_required_fields():
 
     tools = wiki_mcp_tools()
 
-    assert len(tools) == 6
+    assert len(tools) == 8
     names = [tool["name"] for tool in tools]
     assert "wiki_query" in names
     assert "wiki_ingest" in names
@@ -147,6 +147,8 @@ def test_wiki_mcp_tools_have_required_fields():
     assert "wiki_search" in names
     assert "wiki_get" in names
     assert "wiki_lint" in names
+    assert "wiki_graph_stats" in names
+    assert "wiki_resolve_conflicts" in names
 
     for tool in tools:
         assert "name" in tool

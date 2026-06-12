@@ -8,10 +8,12 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from .knowledge_graph import WikiGraph
     from .protocols import Embedder
     from .repo import WikiRepo
     from .schema import WikiSchema
 
+from .conflicts import detect_fact_contradictions
 from .schema import get_lint_threshold
 from .slug import slugify
 
@@ -437,12 +439,46 @@ def duplicate_content(
     return violations
 
 
+def fact_contradiction(
+    repo: WikiRepo,
+    schema: WikiSchema,
+    graph: WikiGraph | None = None,
+) -> list[Violation]:
+    """Find facts sharing (head, relation) with different tails via the knowledge graph."""
+    if graph is None:
+        return []
+
+    conflicts = detect_fact_contradictions(graph)
+    violations: list[Violation] = []
+    for c in conflicts:
+        violations.append(
+            Violation(
+                rule="fact_contradiction",
+                severity="warning",
+                confidence=0.9,
+                message=(
+                    f"Conflicting facts: ({c.fact_a.head}, {c.fact_a.relation}) → "
+                    f"'{c.fact_a.tail}' vs '{c.fact_b.tail}'"
+                ),
+                affected_pages=[c.page_a, c.page_b],
+                suggested_action="investigate_contradiction",
+                metadata={
+                    "fact_a": list(c.fact_a),
+                    "fact_b": list(c.fact_b),
+                    "conflict_type": c.conflict_type,
+                },
+            )
+        )
+    return violations
+
+
 def lint(
     repo: WikiRepo,
     schema: WikiSchema,
     min_confidence: float = 0.7,
     rules: list[Callable[[WikiRepo, WikiSchema], list[Violation]]] | None = None,
     embedder: Embedder | None = None,
+    graph: WikiGraph | None = None,
 ) -> list[Violation]:
     """Run all lint rules on the repo; return violations >= min_confidence.
 
@@ -459,6 +495,9 @@ def lint(
             lambda r, s: stale_sources(r, s, days_threshold=None),
             dead_source_urls,
         ]
+        # Graph-based rules
+        if graph:
+            rules.append(lambda r, s: fact_contradiction(r, s, graph))
         # Include embedding-based rules only if embedder is provided
         if embedder:
             rules.extend(

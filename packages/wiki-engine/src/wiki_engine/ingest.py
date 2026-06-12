@@ -14,7 +14,7 @@ from . import catalog
 from .errors import IngestError
 from .log import LogEntry, today
 from .page import Page
-from .protocols import Embedder, Summarizer
+from .protocols import Embedder, FactExtractor, Summarizer
 from .repo import WikiRepo
 from .retrieval import VectorStore
 from .schema import WikiSchema
@@ -78,6 +78,8 @@ def ingest(
     embedder: Embedder | None = None,
     store: VectorStore | None = None,
     contributor: str | None = None,
+    extractor: FactExtractor | None = None,
+    graph: object | None = None,
 ) -> IngestResult:
     date = date or today()
 
@@ -98,6 +100,7 @@ def ingest(
 
     summary = summarizer.summarize(source)
     embedding = embedder.embed([summary])[0] if embedder is not None and store is not None else None
+    extracted = extractor.extract(summary) if extractor is not None else None
 
     # Serialize the dedup check + filesystem/git writes so concurrent ingests from
     # multiple workflows don't race on the manifest/index/log or the git index. The
@@ -119,12 +122,29 @@ def ingest(
         }
         if contributor:
             frontmatter["contributor"] = contributor
+        if extracted is not None and (extracted.entities or extracted.facts):
+            frontmatter["entities"] = [
+                {"text": e.text, "entity_type": e.entity_type} for e in extracted.entities
+            ]
+            frontmatter["facts"] = [
+                {
+                    "head": f.head,
+                    "relation": f.relation,
+                    "tail": f.tail,
+                    "head_type": f.head_type,
+                    "tail_type": f.tail_type,
+                }
+                for f in extracted.facts
+            ]
         page = Page(slug=slug, frontmatter=frontmatter, body=summary)
         schema.enforce_page(page)
         txn.put_page(page)
 
         if store is not None and embedding is not None:
             store.upsert(slug, embedding)
+
+        if graph is not None and extracted is not None:
+            graph.update(slug, extracted)  # type: ignore[union-attr]
 
         txn.catalog(
             catalog.CatalogEntry(

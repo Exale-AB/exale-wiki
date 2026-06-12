@@ -45,6 +45,7 @@ class ToolContext:
     vectorstore: VectorStore
     answerer: Answerer
     summarizer: Summarizer | None = None
+    graph: Any = None
 
 
 @dataclass(frozen=True)
@@ -366,6 +367,39 @@ def handle_wiki_lint(
     }
 
 
+def handle_wiki_graph_stats(graph: Any) -> dict[str, Any]:
+    """Return knowledge graph vertex/edge counts."""
+    if graph is None:
+        return {"available": False}
+    return {"available": True, **graph.stats}
+
+
+def handle_wiki_resolve_conflicts(
+    graph: Any,
+    repo: WikiRepo | None,
+) -> dict[str, Any]:
+    """Detect fact contradictions in the knowledge graph."""
+    if graph is None:
+        return {"available": False, "conflicts": []}
+
+    from .conflicts import detect_fact_contradictions
+
+    conflicts = detect_fact_contradictions(graph)
+    return {
+        "available": True,
+        "conflicts": [
+            {
+                "fact_a": list(c.fact_a),
+                "fact_b": list(c.fact_b),
+                "conflict_type": c.conflict_type,
+                "page_a": c.page_a,
+                "page_b": c.page_b,
+            }
+            for c in conflicts
+        ],
+    }
+
+
 # ── Tool registry: single source of truth for name → schema → handler ──────
 
 
@@ -423,6 +457,14 @@ def _lint_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         repo=ctx.repo,
         confidence_threshold=args.get("confidence_threshold", 0.5),
     )
+
+
+def _graph_stats_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_graph_stats(graph=ctx.graph)
+
+
+def _resolve_conflicts_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_resolve_conflicts(graph=ctx.graph, repo=ctx.repo)
 
 
 TOOLS: tuple[Tool, ...] = (
@@ -576,6 +618,23 @@ TOOLS: tuple[Tool, ...] = (
             },
         },
         handler=_lint_adapter,
+    ),
+    Tool(
+        name="wiki_graph_stats",
+        description=(
+            "Return knowledge graph vertex/edge counts (entities, facts, schemas, passages)"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=_graph_stats_adapter,
+    ),
+    Tool(
+        name="wiki_resolve_conflicts",
+        description=(
+            "Detect fact contradictions in the knowledge graph — facts sharing "
+            "(head, relation) but with different tails"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=_resolve_conflicts_adapter,
     ),
 )
 

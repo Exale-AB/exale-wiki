@@ -666,3 +666,83 @@ def test_lint_module_coverage():
     assert callable(suggest_refinements), "suggest_refinements should be callable"
     assert Violation is not None, "Violation should exist"
     assert RefinementSuggestion is not None, "RefinementSuggestion should exist"
+
+
+# ---------------------------------------------------------------------------
+# fact_contradiction lint rule (graph-backed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_fact_contradiction_lint_rule():
+    """fact_contradiction finds conflicting facts via the knowledge graph."""
+    from wiki_engine.knowledge_graph import WikiGraph
+    from wiki_engine.lint import fact_contradiction
+    from wiki_engine.protocols import Entity, ExtractedFacts, Fact
+    from wiki_engine.repo import WikiRepo
+    from wiki_engine.schema import WikiSchema
+
+    graph = WikiGraph()
+    graph.update(
+        "page-a",
+        ExtractedFacts(
+            entities=(Entity("Acme", "ORG"), Entity("NYC", "GPE")),
+            facts=(Fact("Acme", "headquartered_in", "NYC", "ORG", "GPE"),),
+        ),
+    )
+    graph.update(
+        "page-b",
+        ExtractedFacts(
+            entities=(Entity("Acme", "ORG"), Entity("London", "GPE")),
+            facts=(Fact("Acme", "headquartered_in", "London", "ORG", "GPE"),),
+        ),
+    )
+    repo = WikiRepo.init(_path := __import__("tempfile").mkdtemp())
+    violations = fact_contradiction(repo, WikiSchema(), graph=graph)
+    assert len(violations) == 1
+    assert violations[0].rule == "fact_contradiction"
+    assert violations[0].severity == "warning"
+    assert "page-a" in violations[0].affected_pages
+    assert "page-b" in violations[0].affected_pages
+
+
+@pytest.mark.unit
+def test_fact_contradiction_skipped_without_graph():
+    """fact_contradiction returns nothing when graph is None."""
+    from wiki_engine.lint import fact_contradiction
+    from wiki_engine.repo import WikiRepo
+    from wiki_engine.schema import WikiSchema
+
+    repo = WikiRepo.init(_path := __import__("tempfile").mkdtemp())
+    assert fact_contradiction(repo, WikiSchema(), graph=None) == []
+
+
+@pytest.mark.unit
+def test_lint_includes_fact_contradiction_when_graph_given():
+    """lint() includes fact_contradiction in defaults when graph is provided."""
+    from wiki_engine.knowledge_graph import WikiGraph
+    from wiki_engine.lint import lint
+    from wiki_engine.protocols import Entity, ExtractedFacts, Fact
+    from wiki_engine.repo import WikiRepo
+    from wiki_engine.schema import WikiSchema
+
+    graph = WikiGraph()
+    graph.update(
+        "page-a",
+        ExtractedFacts(
+            entities=(Entity("X", "ORG"), Entity("Y", "GPE")),
+            facts=(Fact("X", "located_in", "Y", "ORG", "GPE"),),
+        ),
+    )
+    graph.update(
+        "page-b",
+        ExtractedFacts(
+            entities=(Entity("X", "ORG"), Entity("Z", "GPE")),
+            facts=(Fact("X", "located_in", "Z", "ORG", "GPE"),),
+        ),
+    )
+
+    repo = WikiRepo.init(_path := __import__("tempfile").mkdtemp())
+    violations = lint(repo, WikiSchema(), graph=graph, min_confidence=0.5)
+    fact_violations = [v for v in violations if v.rule == "fact_contradiction"]
+    assert len(fact_violations) == 1

@@ -295,3 +295,56 @@ def test_ingest_legacy_off_limits_key_is_inert(tmp_path: Path):
     )
     result = ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
     assert result.created is True
+
+
+# ---------------------------------------------------------------------------
+# Fact extraction integration
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_with_extractor_stores_facts_in_frontmatter(tmp_path: Path):
+    """When an extractor is provided, entities/facts appear in page frontmatter."""
+    from wiki_engine.protocols import Entity, ExtractedFacts, Fact
+
+    class StubExtractor:
+        def extract(self, text: str) -> ExtractedFacts:
+            return ExtractedFacts(
+                entities=(Entity("Acme", "ORG"),),
+                facts=(Fact("Acme", "acquired", "Widget", "ORG", "ORG"),),
+            )
+
+    repo = _repo(tmp_path)
+    source = _source(identifier="ext-test", title="Acme News")
+    result = ingest(
+        source,
+        repo=repo,
+        schema=WikiSchema(default_category="Accounts"),
+        summarizer=FakeSummarizer(),
+        extractor=StubExtractor(),
+    )
+    assert result.created
+    assert result.slug is not None
+    page = repo.read_page(result.slug)
+    assert page is not None
+    assert len(page.frontmatter["entities"]) == 1
+    assert page.frontmatter["entities"][0]["text"] == "Acme"
+    assert len(page.frontmatter["facts"]) == 1
+    assert page.frontmatter["facts"][0]["head"] == "Acme"
+
+
+def test_ingest_without_extractor_has_no_facts(tmp_path: Path):
+    """Backward compat: no extractor means no entities/facts in frontmatter."""
+    repo = _repo(tmp_path)
+    source = _source(identifier="no-ext", title="Plain")
+    result = ingest(
+        source,
+        repo=repo,
+        schema=WikiSchema(default_category="Accounts"),
+        summarizer=FakeSummarizer(),
+    )
+    assert result.created
+    assert result.slug is not None
+    page = repo.read_page(result.slug)
+    assert page is not None
+    assert "entities" not in page.frontmatter
+    assert "facts" not in page.frontmatter

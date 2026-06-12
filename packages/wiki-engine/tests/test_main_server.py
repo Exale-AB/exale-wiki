@@ -62,6 +62,8 @@ def test_tools_list_lists_all_tools(tmp_path: Path):
         "wiki_search",
         "wiki_get",
         "wiki_lint",
+        "wiki_graph_stats",
+        "wiki_resolve_conflicts",
     }
 
 
