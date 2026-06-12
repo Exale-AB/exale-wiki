@@ -13,9 +13,12 @@ from .fakes import FakeAnswerer, FakeEmbedder, FakeSummarizer
 from .ingest import IngestResult, ingest
 from .lint import RefinementSuggestion, Violation, lint, suggest_refinements
 from .mcp_server import (
+    handle_wiki_context,
+    handle_wiki_get,
     handle_wiki_ingest,
     handle_wiki_lint,
     handle_wiki_query,
+    handle_wiki_search,
     wiki_mcp_tools,
 )
 from .page import Page
@@ -58,9 +61,12 @@ __all__ = [
     "WikiError",
     "WikiRepo",
     "WikiSchema",
+    "handle_wiki_context",
+    "handle_wiki_get",
     "handle_wiki_ingest",
     "handle_wiki_lint",
     "handle_wiki_query",
+    "handle_wiki_search",
     "ingest",
     "lint",
     "parse_schema",

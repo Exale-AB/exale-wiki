@@ -8,6 +8,7 @@ from pathlib import Path
 
 from wiki_engine.__main__ import handle_request
 from wiki_engine.fakes import FakeAnswerer, FakeEmbedder, FakeSummarizer
+from wiki_engine.mcp_server import ToolContext
 from wiki_engine.page import Page
 from wiki_engine.repo import WikiRepo
 from wiki_engine.retrieval import NullVectorStore
@@ -17,9 +18,14 @@ def _call(tmp_path: Path, request: dict) -> dict:
     repo = WikiRepo.init(tmp_path, committer=lambda _r, _m: None)
     repo.write_page(Page(slug="p", frontmatter={"title": "P"}, body="alpha bravo"))
     repo.write_index("# Index\n\n## X\n- [[P]] (p) — alpha bravo\n")
-    return handle_request(
-        request, repo, FakeEmbedder(), NullVectorStore(), FakeAnswerer(), FakeSummarizer()
+    ctx = ToolContext(
+        repo=repo,
+        embedder=FakeEmbedder(),
+        vectorstore=NullVectorStore(),
+        answerer=FakeAnswerer(),
+        summarizer=FakeSummarizer(),
     )
+    return handle_request(request, ctx)
 
 
 def _tool(tmp_path: Path, name: str, arguments: dict, req_id: int = 9) -> dict:
