@@ -3,92 +3,49 @@
 import json
 import os
 import sys
-from collections.abc import Sequence
 from pathlib import Path
 
+from .embed_backends import build_retrieval
+from .llm_backends import build_judgment
 from .mcp_server import (
+    handle_wiki_context,
+    handle_wiki_get,
     handle_wiki_ingest,
     handle_wiki_lint,
     handle_wiki_query,
+    handle_wiki_search,
     wiki_mcp_tools,
 )
-from .protocols import Answerer, Embedder
+from .protocols import Answerer, Embedder, Summarizer
 from .repo import WikiRepo
-from .retrieval import Retrieved, VectorStore
-
-
-class FakeEmbedder(Embedder):
-    """Dummy embedder that returns zero vectors (for structural search only)."""
-
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return dummy embeddings."""
-        return [[0.0] * 768 for _ in texts]
-
-
-class FakeVectorStore(VectorStore):
-    """Dummy vector store that returns no results (structural search only)."""
-
-    def upsert(self, slug: str, vector: Sequence[float]) -> None:
-        """No-op."""
-        pass
-
-    def search(self, vector: Sequence[float], k: int) -> list[Retrieved]:
-        """Return empty results (all search via structure only)."""
-        return []
-
-
-class RobustSummarizer(Answerer):
-    """Return raw wiki context for the agent to synthesize from.
-
-    The agent (Hermes) is responsible for the final natural-language response.
-    This class just formats the retrieved context in a way the agent can consume.
-    """
-
-    def answer(self, question: str, context: Sequence[str]) -> str | None:
-        """Return the raw context for the agent to synthesize from.
-
-        Args:
-            question: The user's query
-            context: List of page content snippets
-
-        Returns:
-            Raw context formatted with separators, or None if no context
-        """
-        if not context or not any(context):
-            return None
-
-        # Filter empty/whitespace contexts
-        valid_content = [c for c in context if c and c.strip()]
-        if not valid_content:
-            return None
-
-        # Return raw context with separators for agent consumption
-        return f"Question: {question}\n\n" + "\n\n---\n\n".join(valid_content)
+from .retrieval import VectorStore
 
 
 def main() -> None:
     """Start the wiki MCP server.
 
     Reads WIKI_REPO_PATH from environment and starts an MCP server
-    exposing wiki_query, wiki_ingest, and wiki_lint tools.
+    exposing the wiki tools.
     """
     wiki_repo_path = os.environ.get("WIKI_REPO_PATH", "wiki")
     repo = WikiRepo(Path(wiki_repo_path))
 
-    # Initialize components for MCP handlers
-    embedder = FakeEmbedder()
-    vectorstore = FakeVectorStore()
-    answerer = RobustSummarizer()
+    # Semantic retrieval (local embedder + pgvector) when configured/available,
+    # else structural-only fakes — build_retrieval() degrades gracefully. The
+    # judgment steps (summarize/answer) come from the Hermes-configured model.
+    embedder, vectorstore = build_retrieval()
+    summarizer, answerer = build_judgment()
 
     # Expose tools via stdin/stdout protocol (standard MCP)
     while True:
+        request = None
         try:
             line = sys.stdin.readline()
             if not line:
                 break
 
             request = json.loads(line)
-            response = handle_request(request, repo, embedder, vectorstore, answerer)
+            response = handle_request(request, repo, embedder, vectorstore, answerer, summarizer)
             print(json.dumps(response))
             sys.stdout.flush()
 
@@ -116,6 +73,7 @@ def handle_request(
     embedder: Embedder,
     vectorstore: VectorStore,
     answerer: Answerer,
+    summarizer: Summarizer | None = None,
 ) -> dict:
     """Handle a single MCP request.
 
@@ -124,7 +82,8 @@ def handle_request(
         repo: Wiki repository instance
         embedder: Embedder for query operations
         vectorstore: Vector store for semantic search
-        answerer: Answerer for returning raw context to the agent
+        answerer: Answerer for synthesizing query answers
+        summarizer: Summarizer for ingest page bodies (defaults to FakeSummarizer)
 
     Returns:
         JSON-RPC 2.0 response
@@ -174,7 +133,30 @@ def handle_request(
                     source_text=tool_args.get("source_text"),
                     source_url=tool_args.get("source_url"),
                     category=tool_args.get("category"),
+                    summarizer=summarizer,
+                    embedder=embedder,
+                    store=vectorstore,
+                    contributor=tool_args.get("contributor"),
                 )
+            elif tool_name == "wiki_context":
+                result = handle_wiki_context(
+                    repo=repo,
+                    query=tool_args.get("query"),
+                    vectorstore=vectorstore,
+                    embedder=embedder,
+                    k=tool_args.get("k", 5),
+                    token_budget=tool_args.get("token_budget", 2000),
+                )
+            elif tool_name == "wiki_search":
+                result = handle_wiki_search(
+                    repo=repo,
+                    query=tool_args.get("query"),
+                    vectorstore=vectorstore,
+                    embedder=embedder,
+                    k=tool_args.get("k", 10),
+                )
+            elif tool_name == "wiki_get":
+                result = handle_wiki_get(repo=repo, slug=tool_args.get("slug"))
             elif tool_name == "wiki_lint":
                 result = handle_wiki_lint(
                     repo=repo,

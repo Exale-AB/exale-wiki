@@ -30,12 +30,16 @@ wiki-validation = { workspace = true }
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
-    "ruff>=0.8",
-    "pyright>=1.1.390",
+    # ruff and pyright are pinned exactly: their lint/format/type output changes
+    # between releases, so a loose floor lets a from-scratch `uv sync` pull a
+    # stricter version and surface new findings. Bump these deliberately.
+    "ruff==0.15.17",
+    "pyright==1.1.410",
     "types-pyyaml>=6.0",  # type stubs for PyYAML (pyright)
     # Members are installed editable into the shared venv so tests and
-    # coverage see them by their import names.
-    "wiki-engine",
+    # coverage see them by their import names. wiki-engine[llm] pulls openai so
+    # the model-backed judgment path type-checks and is importable in dev.
+    "wiki-engine[llm]",
     "wiki-utils",
     "wiki-validation",
 ]

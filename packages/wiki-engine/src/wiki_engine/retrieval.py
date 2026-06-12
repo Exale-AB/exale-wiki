@@ -19,6 +19,7 @@ from .slug import slugify
 
 __all__ = [
     "InMemoryVectorStore",
+    "NullVectorStore",
     "PgVectorStore",
     "Retrieved",
     "Retriever",
@@ -51,6 +52,20 @@ def format_vector(vector: Sequence[float]) -> str:
 class VectorStore(Protocol):
     def upsert(self, slug: str, vector: Sequence[float]) -> None: ...
     def search(self, vector: Sequence[float], k: int) -> list[Retrieved]: ...
+
+
+class NullVectorStore:
+    """No-op store: ignores upserts, returns no hits (structural-only retrieval).
+
+    The graceful fallback when no embedder/DB is available — retrieval degrades to
+    structural navigation instead of crashing.
+    """
+
+    def upsert(self, slug: str, vector: Sequence[float]) -> None:
+        pass
+
+    def search(self, vector: Sequence[float], k: int) -> list[Retrieved]:
+        return []
 
 
 class InMemoryVectorStore:

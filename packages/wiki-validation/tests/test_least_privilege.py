@@ -32,7 +32,7 @@ def test_verify_seat_least_privilege_compliant():
         "integrations": {
             "gmail": {"scopes": ["mail.readonly"]},
             "drive": {"scopes": ["drive.readonly"]},
-        }
+        },
     }
 
     result = verify_seat_least_privilege(config)
@@ -49,7 +49,7 @@ def test_verify_seat_least_privilege_over_privileged():
         "integrations": {
             "gmail": {"scopes": ["mail.readonly", "mail.send"]},
             "crm": {"scopes": ["crm.admin"]},
-        }
+        },
     }
 
     result = verify_seat_least_privilege(config)
@@ -65,7 +65,7 @@ def test_verify_seat_least_privilege_scopes_as_string():
         "skill_bundles": ["inbox-triage"],
         "integrations": {
             "gmail": {"scopes": "mail.readonly,drive.readonly"},
-        }
+        },
     }
 
     result = verify_seat_least_privilege(config)
@@ -79,7 +79,7 @@ def test_verify_seat_least_privilege_empty_bundles():
         "skill_bundles": [],
         "integrations": {
             "gmail": {"scopes": ["mail.readonly"]},
-        }
+        },
     }
 
     result = verify_seat_least_privilege(config)

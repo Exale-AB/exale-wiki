@@ -7,16 +7,28 @@ is responsible for reading the context and synthesizing the final response.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from . import catalog
 from .log import LogEntry, format_entry, today
 from .page import Page
 from .protocols import Answerer
 from .repo import WikiRepo
-from .retrieval import Retriever
 from .slug import slugify
 
-__all__ = ["Answer", "query"]
+__all__ = ["Answer", "Retrieves", "query"]
+
+
+class Retrieves(Protocol):
+    """Anything that can retrieve relevant page slugs for a question.
+
+    The concrete ``retrieval.Retriever`` satisfies this, but so does any
+    deterministic stand-in injected in tests — the engine depends on the
+    behaviour, not the class.
+    """
+
+    def retrieve(self, question: str, *, k: int = 5) -> list[str]: ...
+
 
 _SUMMARY_LINE_MAX = 120
 _FILED_CATEGORY = "Answers"
@@ -40,7 +52,7 @@ class Answer:
 def query(
     question: str,
     *,
-    retriever: Retriever,
+    retriever: Retrieves,
     answerer: Answerer,
     repo: WikiRepo,
     k: int = 5,
@@ -82,23 +94,25 @@ def _file_answer(
     repo: WikiRepo, title: str, text: str, citations: tuple[str, ...], date: str
 ) -> str:
     slug = slugify(title)
-    repo.write_page(
-        Page(
-            slug=slug,
-            frontmatter={"title": title, "type": "answer", "citations": list(citations)},
-            body=text,
+    # Serialize with concurrent ingests/filings (shared index.md/log.md + git).
+    with repo.write_lock():
+        repo.write_page(
+            Page(
+                slug=slug,
+                frontmatter={"title": title, "type": "answer", "citations": list(citations)},
+                body=text,
+            )
         )
-    )
-    entries = catalog.upsert_entry(
-        catalog.parse_index(repo.read_index()),
-        catalog.CatalogEntry(
-            title=title,
-            slug=slug,
-            category=_FILED_CATEGORY,
-            summary=(text.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
-        ),
-    )
-    repo.write_index(catalog.render_index(entries))
-    repo.append_log(format_entry(LogEntry(date=date, op="query", title=title)))
-    repo.commit(f"query: {title}")
+        entries = catalog.upsert_entry(
+            catalog.parse_index(repo.read_index()),
+            catalog.CatalogEntry(
+                title=title,
+                slug=slug,
+                category=_FILED_CATEGORY,
+                summary=(text.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
+            ),
+        )
+        repo.write_index(catalog.render_index(entries))
+        repo.append_log(format_entry(LogEntry(date=date, op="query", title=title)))
+        repo.commit(f"query: {title}")
     return slug
