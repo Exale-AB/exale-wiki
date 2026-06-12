@@ -1,4 +1,10 @@
-"""Tests for off-limits category enforcement in wiki ingest."""
+"""Tests for off-limits category enforcement in wiki ingest.
+
+T11 unified off-limits on the single canonical key
+``honesty_rules.off_limits_categories``; the legacy top-level ``off_limits`` key
+and its ``get_off_limits_categories`` / ``validate_ingestion_category`` helpers
+were removed.
+"""
 
 from pathlib import Path
 
@@ -8,11 +14,7 @@ from wiki_engine.errors import SchemaError
 from wiki_engine.fakes import FakeSummarizer
 from wiki_engine.ingest import ingest
 from wiki_engine.repo import WikiRepo
-from wiki_engine.schema import (
-    WikiSchema,
-    get_off_limits_categories,
-    validate_ingestion_category,
-)
+from wiki_engine.schema import WikiSchema
 from wiki_engine.source import Source, SourceKind
 
 
@@ -33,44 +35,13 @@ def _source(**kw) -> Source:
     return Source(**base)
 
 
-def test_get_off_limits_categories():
-    """Parse off-limits categories from schema."""
-    schema = {"off_limits": ["confidential", "legal", "executive-only"]}
-    off_limits = get_off_limits_categories(schema)
-    assert off_limits == ["confidential", "legal", "executive-only"]
-
-
-def test_get_off_limits_categories_empty():
-    """Empty off_limits returns empty list."""
-    schema = {}
-    off_limits = get_off_limits_categories(schema)
-    assert off_limits == []
-
-
-def test_validate_ingestion_category_allowed():
-    """Allowed category passes validation."""
-    schema = {"off_limits": ["confidential"]}
-    # Should not raise
-    validate_ingestion_category("general", schema)
-
-
-def test_validate_ingestion_category_off_limits():
-    """Off-limits category raises SchemaError."""
-    schema = {"off_limits": ["confidential", "legal"]}
-
-    with pytest.raises(SchemaError, match="off-limits"):
-        validate_ingestion_category("confidential", schema)
-
-
 def test_ingest_rejects_off_limits_category(tmp_path: Path):
-    """ingest rejects off-limits content via schema validation."""
+    """ingest rejects a page whose category is off-limits (canonical key)."""
     repo = _repo(tmp_path)
 
-    # Try to ingest a page that would be marked as confidential
-    # We'll test by having the default category be off-limits
     schema_with_off_limits_default = WikiSchema(
         default_category="confidential",
-        honesty_rules={"off_limits": ["confidential"]},
+        honesty_rules={"off_limits_categories": ["confidential"]},
     )
 
     with pytest.raises(SchemaError, match="off-limits"):
@@ -88,7 +59,7 @@ def test_ingest_allows_permitted_category(tmp_path: Path):
 
     schema = WikiSchema(
         default_category="general",
-        honesty_rules={"off_limits": ["confidential", "legal"]},
+        honesty_rules={"off_limits_categories": ["confidential", "legal"]},
     )
 
     result = ingest(

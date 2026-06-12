@@ -17,12 +17,7 @@ from .page import Page
 from .protocols import Embedder, Summarizer
 from .repo import WikiRepo
 from .retrieval import VectorStore
-from .schema import (
-    WikiSchema,
-    enforce_honesty_category,
-    enforce_source_kind,
-    validate_ingestion_category,
-)
+from .schema import WikiSchema
 from .slug import slugify
 from .source import Source
 
@@ -87,7 +82,7 @@ def ingest(
     date = date or today()
 
     # Enforce schema rules before proceeding with ingest
-    enforce_source_kind(str(source.kind), schema)
+    schema.enforce_source(source)
 
     if set(source.categories) & set(off_limits):
         return IngestResult(slug=None, excluded=True)
@@ -124,11 +119,8 @@ def ingest(
         if contributor:
             frontmatter["contributor"] = contributor
         page = Page(slug=slug, frontmatter=frontmatter, body=summary)
-        # Validate category is not off-limits before persisting the page
-        page_category = page.frontmatter.get("category", schema.default_category)
-        validate_ingestion_category(page_category, schema.honesty_rules)
-        # Enforce honesty rules before persisting the page
-        enforce_honesty_category(page, schema)
+        # Enforce the full page ruleset (type/category/honesty) before persisting.
+        schema.enforce_page(page)
         repo.write_page(page)
 
         if store is not None and embedding is not None:

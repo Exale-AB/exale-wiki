@@ -47,16 +47,29 @@ session should be able to pick one up cold.
 | 08 | [Token-budgeted chunked retrieval](tasks/08-token-budget-chunking.md) | Scale | P3 | M | med | 03 | ☑ done |
 | 09 | [MCP server hardening (SDK/async/tests)](tasks/09-mcp-server-hardening.md) | Hardening | P3 | L | med | — | ☑ done (FastMCP deferred) |
 | 10 | [Provenance + visible degradation](tasks/10-provenance-degradation.md) | Trust | P3 | M | low | 01 | ☑ done |
+| 11 | [Self-enforcing schema (one ruleset, one off-limits key)](tasks/11-self-enforcing-schema.md) | Architecture | P1 | M | med | — | ☐ todo |
+| 12 | [Filing transaction (`repo.transaction`)](tasks/12-filing-transaction.md) | Architecture | P2 | M | med | — | ☐ todo |
+| 13 | [MCP tool registry (collapse schema+dispatch+handler)](tasks/13-mcp-tool-registry.md) | Architecture | P3 | M | med | — | ☐ todo |
 
 ### Recommended sequencing
 **Phase 1 — Correctness & primitives (ship first):** 01 → 02 → 03 → 04
 **Phase 2 — Semantic retrieval:** 06 → 05
 **Phase 3 — Reliability at concurrency:** 07
 **Phase 4 — Scale & hardening:** 08 → 10 → 09
+**Phase 5 — Architecture deepening:** 11 → 12 → 13
 
 01–04 deliver immediate value for "context for any workflow" and need no embeddings.
 05/06 are the biggest retrieval-quality win. 07 is the key reliability gate before
 many workflows write concurrently.
+
+11–13 are **deepening refactors** from the 2026-06-12 architecture review (HTML
+report; candidates #2/#1/#3 respectively). They are mutually independent — pick any
+order — but **11 first**: it fixes a live correctness bug (off-limits enforced via
+two different frontmatter keys, so one of the three checks is a silent no-op) while
+it deepens, and closes a gap (page-type rules unenforced on ingest). 12 is the
+biggest pure-locality win (the "file a page" transaction is open-coded in ingest +
+query). 13 is mechanical and lowest-priority — do it only if the MCP tool surface
+keeps growing.
 
 ---
 
@@ -94,3 +107,4 @@ many workflows write concurrently.
 - 2026-06-12  T09 Phase A done — `test_main_server.py` covers `handle_request` (__main__ 0%→66%); timeouts + FastMCP deferred to Phase B.
 - 2026-06-12  T10 done — `contributor` provenance on ingest + `mode`/`degraded` flags on ingest/query; redeployed & verified.
 - 2026-06-12  T09 Phase B — model-call timeout (`WIKI_LLM_TIMEOUT`, SDK-level) verified bounding a hang; FastMCP migration evaluated and deferred (low benefit / high risk under current single-threaded transport).
+- 2026-06-12  Architecture review (HTML report) → specced Phase 5 tasks 11–13 (self-enforcing schema, filing transaction, MCP tool registry).

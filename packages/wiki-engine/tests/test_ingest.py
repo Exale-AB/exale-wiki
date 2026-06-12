@@ -8,7 +8,7 @@ from wiki_engine.fakes import FakeSummarizer
 from wiki_engine.ingest import IngestResult, ingest
 from wiki_engine.log import parse_log
 from wiki_engine.repo import WikiRepo
-from wiki_engine.schema import WikiSchema
+from wiki_engine.schema import PageTypeRule, WikiSchema
 from wiki_engine.source import Source, SourceKind
 
 
@@ -228,3 +228,70 @@ def test_ingest_rejects_off_limits_honesty_category(tmp_path: Path):
             schema=schema,
             summarizer=FakeSummarizer(),
         )
+
+
+# --- T11: schema enforces its full ruleset on ingest --------------------------
+
+
+def test_ingest_enforces_page_type_required_frontmatter(tmp_path: Path):
+    """Page-type required-frontmatter rules ARE enforced on ingest.
+
+    Previously a silent gap: ingest never invoked page-type enforcement, so a
+    seat's page_type_rules were decorative in the ingest path.
+    """
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        page_type_rules={
+            "source": PageTypeRule(required_frontmatter_fields=("type", "category", "author"))
+        }
+    )
+    with pytest.raises(SchemaError, match="missing required frontmatter"):
+        ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+    assert repo.list_pages() == []  # nothing persisted on rejection
+
+
+def test_ingest_enforces_page_type_allowed_categories(tmp_path: Path):
+    """A page-type that restricts categories is enforced on ingest."""
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        default_category="general",
+        page_type_rules={"source": PageTypeRule(allowed_categories=("ops", "faq"))},
+    )
+    with pytest.raises(SchemaError, match="not in"):
+        ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+
+
+def test_off_limits_excluded_does_not_summarize(tmp_path: Path):
+    """An off-limits source is excluded BEFORE the (costly) summarize step."""
+    repo = _repo(tmp_path)
+
+    class _SpySummarizer:
+        def __init__(self) -> None:
+            self.called = False
+
+        def summarize(self, source: Source) -> str:
+            self.called = True
+            return "should not happen"
+
+    spy = _SpySummarizer()
+    result = ingest(
+        _source(categories=("personal-finances",)),
+        repo=repo,
+        schema=WikiSchema(),
+        summarizer=spy,
+        off_limits=["personal-finances"],
+    )
+    assert result == IngestResult(slug=None, excluded=True)
+    assert spy.called is False
+
+
+def test_ingest_legacy_off_limits_key_is_inert(tmp_path: Path):
+    """Only honesty_rules.off_limits_categories gates ingest; the legacy
+    'off_limits' key is no longer recognized (T11 single-key unification)."""
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        default_category="confidential",
+        honesty_rules={"off_limits": ["confidential"]},  # legacy key → inert
+    )
+    result = ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+    assert result.created is True
