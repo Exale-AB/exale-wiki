@@ -8,15 +8,49 @@ deterministic fakes in tests (see ``fakes.py``). ``Judge`` arrives in P4c.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from dataclasses import dataclass
+from typing import NamedTuple, Protocol, runtime_checkable
 
 from .source import Source
 
-__all__ = ["Answerer", "Embedder", "Summarizer", "Vector"]
+__all__ = [
+    "Answerer",
+    "Embedder",
+    "Entity",
+    "ExtractedFacts",
+    "Fact",
+    "FactExtractor",
+    "Summarizer",
+    "Vector",
+]
 
 # A single embedding vector. Plain floats keep the core dependency-free; the
 # pgvector store converts to/from its own wire format at the boundary.
 Vector = Sequence[float]
+
+
+class Entity(NamedTuple):
+    text: str
+    entity_type: str
+
+
+class Fact(NamedTuple):
+    head: str
+    relation: str
+    tail: str
+    head_type: str
+    tail_type: str
+
+
+@dataclass(frozen=True)
+class ExtractedFacts:
+    entities: tuple[Entity, ...]
+    facts: tuple[Fact, ...]
+
+
+@runtime_checkable
+class FactExtractor(Protocol):
+    def extract(self, text: str) -> ExtractedFacts: ...
 
 
 class Summarizer(Protocol):

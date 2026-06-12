@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from . import catalog
-from .protocols import Embedder
+from .protocols import Embedder, FactExtractor
 from .repo import WikiRepo
 from .slug import slugify
 
@@ -26,6 +26,7 @@ __all__ = [
     "VectorStore",
     "cosine",
     "format_vector",
+    "reciprocal_rank_fusion",
 ]
 
 
@@ -42,6 +43,15 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     if norm_a == 0.0 or norm_b == 0.0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def reciprocal_rank_fusion(*ranked_lists: list[str], k: int, rank_constant: int = 60) -> list[str]:
+    """Merge multiple ranked lists via Reciprocal Rank Fusion (RRF)."""
+    scores: dict[str, float] = {}
+    for ranked in ranked_lists:
+        for rank, slug in enumerate(ranked):
+            scores[slug] = scores.get(slug, 0.0) + 1.0 / (rank_constant + rank)
+    return sorted(scores, key=lambda s: scores[s], reverse=True)[:k]
 
 
 def format_vector(vector: Sequence[float]) -> str:
@@ -84,12 +94,22 @@ class InMemoryVectorStore:
 
 
 class Retriever:
-    """Hybrid retrieval: structural navigation first, vector recall second."""
+    """Hybrid retrieval: structural + graph-PPR + vector, fused via RRF."""
 
-    def __init__(self, *, repo: WikiRepo, store: VectorStore, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        *,
+        repo: WikiRepo,
+        store: VectorStore,
+        embedder: Embedder,
+        graph: object | None = None,
+        extractor: FactExtractor | None = None,
+    ) -> None:
         self._repo = repo
         self._store = store
         self._embedder = embedder
+        self._graph = graph
+        self._extractor = extractor
 
     def structural(self, question: str, *, k: int) -> list[str]:
         tokens = {t for t in question.lower().split() if t}
@@ -117,12 +137,28 @@ class Retriever:
         return (ranked + neighbors)[:k]
 
     def retrieve(self, question: str, *, k: int = 5) -> list[str]:
-        """Structural hits first (Karpathy-faithful), then vector-only slugs."""
+        """Structural hits + graph PPR + vector, fused via RRF when graph available."""
         structural = self.structural(question, k=k)
         query_vector = self._embedder.embed([question])[0]
         vector_slugs = [hit.slug for hit in self._store.search(query_vector, k)]
+
+        if self._graph is not None and self._extractor is not None:
+            graph_slugs = self._graph_retrieve(question, k=k)
+            return reciprocal_rank_fusion(structural, graph_slugs, vector_slugs, k=k)
+
         merged = structural + [slug for slug in vector_slugs if slug not in structural]
         return merged[:k]
+
+    def _graph_retrieve(self, question: str, *, k: int) -> list[str]:
+        extracted = self._extractor.extract(question)  # type: ignore[union-attr]
+        entity_names = [e.text for e in extracted.entities]
+        if not entity_names:
+            return []
+        seeds = self._graph.entity_lookup(entity_names)  # type: ignore[union-attr]
+        if not seeds:
+            return []
+        ranked = self._graph.ppr(seeds, top_k=k)  # type: ignore[union-attr]
+        return [slug for slug, _score in ranked]
 
 
 class PgVectorStore:

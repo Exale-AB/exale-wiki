@@ -39,7 +39,7 @@ dev = [
     # Members are installed editable into the shared venv so tests and
     # coverage see them by their import names. wiki-engine[llm] pulls openai so
     # the model-backed judgment path type-checks and is importable in dev.
-    "wiki-engine[llm]",
+    "wiki-engine[llm,extraction]",
     "wiki-utils",
     "wiki-validation",
 ]

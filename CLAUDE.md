@@ -99,10 +99,11 @@ hermes `:8642`) may still be running but is **not** used by the native path.
 
 ## Gotchas
 
-- **Loose dev-tool pins** (`ruff>=0.8`, `pyright>=1.1.390`): a from-scratch `uv sync` pulls
-  newer, stricter versions that surface pre-existing format drift in `wiki-validation` and
-  type errors in `wiki-engine/tests/test_query.py`. `uv run pytest` and `ruff check` are
-  green; `ruff format --check` and `pyright` are not.
+- **Dev-tool pins are exact** (`ruff==0.15.17`, `pyright==1.1.410`) so output is stable
+  across machines; bump them deliberately. The full gate is green: `uv run pytest`,
+  `ruff check`, `ruff format --check`, and `pyright` (0 errors — only a benign
+  `reportMissingModuleSource` warning for the optional, lazily-imported `requests` in
+  `lint.py`'s `dead_source_urls` rule).
 - The `integration` pytest marker is declared but unused — the committed suite is all unit
   tests with no live DB. `PgVectorStore` runtime paths are deliberately excluded from coverage.
 - `wiki_utils` is not imported anywhere in the test run, so it contributes nothing to the
@@ -113,3 +114,13 @@ hermes `:8642`) may still be running but is **not** used by the native path.
 - All LLM calls route through Hermes (`hermes-client`) — no direct LLM API calls.
 - EU data residency only.
 - Boring stack on purpose: Hermes (self-hosted) + Postgres/pgvector. No Kubernetes.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)

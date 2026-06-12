@@ -8,7 +8,7 @@ from wiki_engine.fakes import FakeSummarizer
 from wiki_engine.ingest import IngestResult, ingest
 from wiki_engine.log import parse_log
 from wiki_engine.repo import WikiRepo
-from wiki_engine.schema import WikiSchema
+from wiki_engine.schema import PageTypeRule, WikiSchema
 from wiki_engine.source import Source, SourceKind
 
 
@@ -228,3 +228,123 @@ def test_ingest_rejects_off_limits_honesty_category(tmp_path: Path):
             schema=schema,
             summarizer=FakeSummarizer(),
         )
+
+
+# --- T11: schema enforces its full ruleset on ingest --------------------------
+
+
+def test_ingest_enforces_page_type_required_frontmatter(tmp_path: Path):
+    """Page-type required-frontmatter rules ARE enforced on ingest.
+
+    Previously a silent gap: ingest never invoked page-type enforcement, so a
+    seat's page_type_rules were decorative in the ingest path.
+    """
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        page_type_rules={
+            "source": PageTypeRule(required_frontmatter_fields=("type", "category", "author"))
+        }
+    )
+    with pytest.raises(SchemaError, match="missing required frontmatter"):
+        ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+    assert repo.list_pages() == []  # nothing persisted on rejection
+
+
+def test_ingest_enforces_page_type_allowed_categories(tmp_path: Path):
+    """A page-type that restricts categories is enforced on ingest."""
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        default_category="general",
+        page_type_rules={"source": PageTypeRule(allowed_categories=("ops", "faq"))},
+    )
+    with pytest.raises(SchemaError, match="not in"):
+        ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+
+
+def test_off_limits_excluded_does_not_summarize(tmp_path: Path):
+    """An off-limits source is excluded BEFORE the (costly) summarize step."""
+    repo = _repo(tmp_path)
+
+    class _SpySummarizer:
+        def __init__(self) -> None:
+            self.called = False
+
+        def summarize(self, source: Source) -> str:
+            self.called = True
+            return "should not happen"
+
+    spy = _SpySummarizer()
+    result = ingest(
+        _source(categories=("personal-finances",)),
+        repo=repo,
+        schema=WikiSchema(),
+        summarizer=spy,
+        off_limits=["personal-finances"],
+    )
+    assert result == IngestResult(slug=None, excluded=True)
+    assert spy.called is False
+
+
+def test_ingest_legacy_off_limits_key_is_inert(tmp_path: Path):
+    """Only honesty_rules.off_limits_categories gates ingest; the legacy
+    'off_limits' key is no longer recognized (T11 single-key unification)."""
+    repo = _repo(tmp_path)
+    schema = WikiSchema(
+        default_category="confidential",
+        honesty_rules={"off_limits": ["confidential"]},  # legacy key → inert
+    )
+    result = ingest(_source(), repo=repo, schema=schema, summarizer=FakeSummarizer())
+    assert result.created is True
+
+
+# ---------------------------------------------------------------------------
+# Fact extraction integration
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_with_extractor_stores_facts_in_frontmatter(tmp_path: Path):
+    """When an extractor is provided, entities/facts appear in page frontmatter."""
+    from wiki_engine.protocols import Entity, ExtractedFacts, Fact
+
+    class StubExtractor:
+        def extract(self, text: str) -> ExtractedFacts:
+            return ExtractedFacts(
+                entities=(Entity("Acme", "ORG"),),
+                facts=(Fact("Acme", "acquired", "Widget", "ORG", "ORG"),),
+            )
+
+    repo = _repo(tmp_path)
+    source = _source(identifier="ext-test", title="Acme News")
+    result = ingest(
+        source,
+        repo=repo,
+        schema=WikiSchema(default_category="Accounts"),
+        summarizer=FakeSummarizer(),
+        extractor=StubExtractor(),
+    )
+    assert result.created
+    assert result.slug is not None
+    page = repo.read_page(result.slug)
+    assert page is not None
+    assert len(page.frontmatter["entities"]) == 1
+    assert page.frontmatter["entities"][0]["text"] == "Acme"
+    assert len(page.frontmatter["facts"]) == 1
+    assert page.frontmatter["facts"][0]["head"] == "Acme"
+
+
+def test_ingest_without_extractor_has_no_facts(tmp_path: Path):
+    """Backward compat: no extractor means no entities/facts in frontmatter."""
+    repo = _repo(tmp_path)
+    source = _source(identifier="no-ext", title="Plain")
+    result = ingest(
+        source,
+        repo=repo,
+        schema=WikiSchema(default_category="Accounts"),
+        summarizer=FakeSummarizer(),
+    )
+    assert result.created
+    assert result.slug is not None
+    page = repo.read_page(result.slug)
+    assert page is not None
+    assert "entities" not in page.frontmatter
+    assert "facts" not in page.frontmatter

@@ -7,18 +7,8 @@ from pathlib import Path
 
 from .embed_backends import build_retrieval
 from .llm_backends import build_judgment
-from .mcp_server import (
-    handle_wiki_context,
-    handle_wiki_get,
-    handle_wiki_ingest,
-    handle_wiki_lint,
-    handle_wiki_query,
-    handle_wiki_search,
-    wiki_mcp_tools,
-)
-from .protocols import Answerer, Embedder, Summarizer
+from .mcp_server import TOOL_REGISTRY, ToolContext, wiki_mcp_tools
 from .repo import WikiRepo
-from .retrieval import VectorStore
 
 
 def main() -> None:
@@ -35,6 +25,13 @@ def main() -> None:
     # judgment steps (summarize/answer) come from the Hermes-configured model.
     embedder, vectorstore = build_retrieval()
     summarizer, answerer = build_judgment()
+    ctx = ToolContext(
+        repo=repo,
+        embedder=embedder,
+        vectorstore=vectorstore,
+        answerer=answerer,
+        summarizer=summarizer,
+    )
 
     # Expose tools via stdin/stdout protocol (standard MCP)
     while True:
@@ -45,7 +42,7 @@ def main() -> None:
                 break
 
             request = json.loads(line)
-            response = handle_request(request, repo, embedder, vectorstore, answerer, summarizer)
+            response = handle_request(request, ctx)
             print(json.dumps(response))
             sys.stdout.flush()
 
@@ -67,26 +64,11 @@ def main() -> None:
             sys.stdout.flush()
 
 
-def handle_request(
-    request: dict,
-    repo: WikiRepo,
-    embedder: Embedder,
-    vectorstore: VectorStore,
-    answerer: Answerer,
-    summarizer: Summarizer | None = None,
-) -> dict:
-    """Handle a single MCP request.
+def handle_request(request: dict, ctx: ToolContext) -> dict:
+    """Handle a single MCP JSON-RPC 2.0 request.
 
-    Args:
-        request: JSON-RPC 2.0 request
-        repo: Wiki repository instance
-        embedder: Embedder for query operations
-        vectorstore: Vector store for semantic search
-        answerer: Answerer for synthesizing query answers
-        summarizer: Summarizer for ingest page bodies (defaults to FakeSummarizer)
-
-    Returns:
-        JSON-RPC 2.0 response
+    Dispatch for ``tools/call`` is registry-driven: every tool advertised in
+    ``tools/list`` resolves to a handler by construction (see ``TOOL_REGISTRY``).
     """
     method = request.get("method")
     params = request.get("params", {})
@@ -115,66 +97,23 @@ def handle_request(
 
     elif method == "tools/call":
         tool_name = params.get("name")
-        tool_args = params.get("arguments", {})
-
+        tool = TOOL_REGISTRY.get(tool_name)
+        if tool is None:
+            return {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32601,
+                    "message": f"Unknown tool: {tool_name}",
+                },
+                "id": req_id,
+            }
         try:
-            if tool_name == "wiki_query":
-                result = handle_wiki_query(
-                    repo=repo,
-                    query=tool_args.get("query"),
-                    file_as_new_page=tool_args.get("file_as_new_page", False),
-                    vectorstore=vectorstore,
-                    embedder=embedder,
-                    answerer=answerer,
-                )
-            elif tool_name == "wiki_ingest":
-                result = handle_wiki_ingest(
-                    repo=repo,
-                    source_text=tool_args.get("source_text"),
-                    source_url=tool_args.get("source_url"),
-                    category=tool_args.get("category"),
-                    summarizer=summarizer,
-                    embedder=embedder,
-                    store=vectorstore,
-                    contributor=tool_args.get("contributor"),
-                )
-            elif tool_name == "wiki_context":
-                result = handle_wiki_context(
-                    repo=repo,
-                    query=tool_args.get("query"),
-                    vectorstore=vectorstore,
-                    embedder=embedder,
-                    k=tool_args.get("k", 5),
-                    token_budget=tool_args.get("token_budget", 2000),
-                )
-            elif tool_name == "wiki_search":
-                result = handle_wiki_search(
-                    repo=repo,
-                    query=tool_args.get("query"),
-                    vectorstore=vectorstore,
-                    embedder=embedder,
-                    k=tool_args.get("k", 10),
-                )
-            elif tool_name == "wiki_get":
-                result = handle_wiki_get(repo=repo, slug=tool_args.get("slug"))
-            elif tool_name == "wiki_lint":
-                result = handle_wiki_lint(
-                    repo=repo,
-                    confidence_threshold=tool_args.get("confidence_threshold", 0.5),
-                )
-            else:
-                return {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
-                    "id": req_id,
-                }
-
+            result = tool.handler(ctx, params.get("arguments", {}))
             return {
                 "jsonrpc": "2.0",
                 "result": {"content": [{"type": "text", "text": json.dumps(result)}]},
                 "id": req_id,
             }
-
         except Exception as e:
             return {
                 "jsonrpc": "2.0",
@@ -185,7 +124,10 @@ def handle_request(
     else:
         return {
             "jsonrpc": "2.0",
-            "error": {"code": -32601, "message": f"Unknown method: {method}"},
+            "error": {
+                "code": -32601,
+                "message": f"Unknown method: {method}",
+            },
             "id": req_id,
         }
 

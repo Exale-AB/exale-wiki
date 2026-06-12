@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .protocols import Answerer, Embedder, Summarizer
@@ -34,158 +36,26 @@ def load_seat_schema(repo: WikiRepo) -> WikiSchema:
     return WikiSchema()
 
 
-def wiki_mcp_tools() -> list[dict[str, Any]]:
-    """Return MCP tool definitions for wiki operations.
+@dataclass(frozen=True)
+class ToolContext:
+    """Bundled collaborators shared by every MCP tool handler."""
 
-    Tools:
-    - wiki_query: Query the wiki and retrieve grounded answers
-    - wiki_ingest: Ingest a new source into the wiki
-    - wiki_lint: Run lint and get violations + suggestions
+    repo: WikiRepo
+    embedder: Embedder
+    vectorstore: VectorStore
+    answerer: Answerer
+    summarizer: Summarizer | None = None
+    graph: Any = None
 
-    Each tool is a JSON Schema compatible MCP tool definition.
-    """
-    return [
-        {
-            "name": "wiki_query",
-            "description": "Query the Knowledge Wiki and retrieve grounded answers with citations",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "The query to search the wiki for (e.g., 'How to set up Gmail?')"
-                        ),
-                    },
-                    "file_as_new_page": {
-                        "type": "boolean",
-                        "description": (
-                            "If true, file the answer as a new wiki page ('never asked twice')"
-                        ),
-                        "default": False,
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "wiki_ingest",
-            "description": "Ingest a new source into the Knowledge Wiki (text, URL, or message)",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "source_text": {
-                        "type": "string",
-                        "description": (
-                            "The text content to ingest (e.g., email body, "
-                            "note, or document excerpt)"
-                        ),
-                    },
-                    "source_url": {
-                        "type": "string",
-                        "description": "A URL to fetch and ingest as a source",
-                    },
-                    "category": {
-                        "type": "string",
-                        "description": (
-                            "The wiki category to ingest into (e.g., 'email', 'process', 'faq')"
-                        ),
-                    },
-                    "contributor": {
-                        "type": "string",
-                        "description": (
-                            "Optional: which workflow/bundle/person added this source "
-                            "(recorded as provenance on the page)"
-                        ),
-                    },
-                },
-                "required": ["category"],
-                "anyOf": [
-                    {"required": ["source_text"]},
-                    {"required": ["source_url"]},
-                ],
-            },
-        },
-        {
-            "name": "wiki_context",
-            "description": (
-                "Retrieve ranked raw context (page snippets + citations) for a query "
-                "WITHOUT synthesizing an answer — fast grounding material for a "
-                "workflow to reason over itself. Use this instead of wiki_query when "
-                "you want context, not a finished answer."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "What to retrieve context about",
-                    },
-                    "k": {
-                        "type": "integer",
-                        "description": "Max pages to consider (default: 5)",
-                        "default": 5,
-                    },
-                    "token_budget": {
-                        "type": "integer",
-                        "description": "Approx token cap on returned context (default: 2000)",
-                        "default": 2000,
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "wiki_search",
-            "description": (
-                "Ranked search hits (slug, title, summary, score) with NO page bodies "
-                "and no synthesis — cheap way to check whether a page already exists or "
-                "to browse. Use before wiki_ingest to avoid duplicates."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search terms"},
-                    "k": {
-                        "type": "integer",
-                        "description": "Max hits to return (default: 10)",
-                        "default": 10,
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "wiki_get",
-            "description": "Fetch a single wiki page by slug (full frontmatter + body).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "slug": {"type": "string", "description": "The page slug to fetch"},
-                },
-                "required": ["slug"],
-            },
-        },
-        {
-            "name": "wiki_lint",
-            "description": (
-                "Run lint checks on the wiki and retrieve violations + "
-                "schema-refinement suggestions"
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "confidence_threshold": {
-                        "type": "number",
-                        "description": (
-                            "Minimum confidence (0.0–1.0) for violations to report (default: 0.5)"
-                        ),
-                        "default": 0.5,
-                    },
-                },
-            },
-        },
-    ]
+
+@dataclass(frozen=True)
+class Tool:
+    """Single source of truth for one MCP tool: schema + handler together."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    handler: Callable[[ToolContext, dict[str, Any]], dict[str, Any]]
 
 
 def handle_wiki_query(
@@ -495,3 +365,289 @@ def handle_wiki_lint(
             for s in suggestions
         ],
     }
+
+
+def handle_wiki_graph_stats(graph: Any) -> dict[str, Any]:
+    """Return knowledge graph vertex/edge counts."""
+    if graph is None:
+        return {"available": False}
+    return {"available": True, **graph.stats}
+
+
+def handle_wiki_resolve_conflicts(
+    graph: Any,
+    repo: WikiRepo | None,
+) -> dict[str, Any]:
+    """Detect fact contradictions in the knowledge graph."""
+    if graph is None:
+        return {"available": False, "conflicts": []}
+
+    from .conflicts import detect_fact_contradictions
+
+    conflicts = detect_fact_contradictions(graph)
+    return {
+        "available": True,
+        "conflicts": [
+            {
+                "fact_a": list(c.fact_a),
+                "fact_b": list(c.fact_b),
+                "conflict_type": c.conflict_type,
+                "page_a": c.page_a,
+                "page_b": c.page_b,
+            }
+            for c in conflicts
+        ],
+    }
+
+
+# ── Tool registry: single source of truth for name → schema → handler ──────
+
+
+def _query_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_query(
+        repo=ctx.repo,
+        query=args["query"],
+        file_as_new_page=args.get("file_as_new_page", False),
+        vectorstore=ctx.vectorstore,
+        embedder=ctx.embedder,
+        answerer=ctx.answerer,
+    )
+
+
+def _ingest_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_ingest(
+        repo=ctx.repo,
+        source_text=args.get("source_text"),
+        source_url=args.get("source_url"),
+        category=args["category"],
+        summarizer=ctx.summarizer,
+        embedder=ctx.embedder,
+        store=ctx.vectorstore,
+        contributor=args.get("contributor"),
+    )
+
+
+def _context_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_context(
+        repo=ctx.repo,
+        query=args["query"],
+        vectorstore=ctx.vectorstore,
+        embedder=ctx.embedder,
+        k=args.get("k", 5),
+        token_budget=args.get("token_budget", 2000),
+    )
+
+
+def _search_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_search(
+        repo=ctx.repo,
+        query=args["query"],
+        vectorstore=ctx.vectorstore,
+        embedder=ctx.embedder,
+        k=args.get("k", 10),
+    )
+
+
+def _get_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_get(repo=ctx.repo, slug=args["slug"])
+
+
+def _lint_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_lint(
+        repo=ctx.repo,
+        confidence_threshold=args.get("confidence_threshold", 0.5),
+    )
+
+
+def _graph_stats_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_graph_stats(graph=ctx.graph)
+
+
+def _resolve_conflicts_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    return handle_wiki_resolve_conflicts(graph=ctx.graph, repo=ctx.repo)
+
+
+TOOLS: tuple[Tool, ...] = (
+    Tool(
+        name="wiki_query",
+        description=("Query the Knowledge Wiki and retrieve grounded answers with citations"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "The query to search the wiki for (e.g., 'How to set up Gmail?')"
+                    ),
+                },
+                "file_as_new_page": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, file the answer as a new wiki page ('never asked twice')"
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_query_adapter,
+    ),
+    Tool(
+        name="wiki_ingest",
+        description=("Ingest a new source into the Knowledge Wiki (text, URL, or message)"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_text": {
+                    "type": "string",
+                    "description": (
+                        "The text content to ingest (e.g., email body, note, or document excerpt)"
+                    ),
+                },
+                "source_url": {
+                    "type": "string",
+                    "description": "A URL to fetch and ingest as a source",
+                },
+                "category": {
+                    "type": "string",
+                    "description": (
+                        "The wiki category to ingest into (e.g., 'email', 'process', 'faq')"
+                    ),
+                },
+                "contributor": {
+                    "type": "string",
+                    "description": (
+                        "Optional: which workflow/bundle/person added this"
+                        " source (recorded as provenance on the page)"
+                    ),
+                },
+            },
+            "required": ["category"],
+            "anyOf": [
+                {"required": ["source_text"]},
+                {"required": ["source_url"]},
+            ],
+        },
+        handler=_ingest_adapter,
+    ),
+    Tool(
+        name="wiki_context",
+        description=(
+            "Retrieve ranked raw context (page snippets + citations) for a"
+            " query WITHOUT synthesizing an answer — fast grounding material"
+            " for a workflow to reason over itself. Use this instead of"
+            " wiki_query when you want context, not a finished answer."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to retrieve context about",
+                },
+                "k": {
+                    "type": "integer",
+                    "description": "Max pages to consider (default: 5)",
+                    "default": 5,
+                },
+                "token_budget": {
+                    "type": "integer",
+                    "description": ("Approx token cap on returned context (default: 2000)"),
+                    "default": 2000,
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_context_adapter,
+    ),
+    Tool(
+        name="wiki_search",
+        description=(
+            "Ranked search hits (slug, title, summary, score) with NO page"
+            " bodies and no synthesis — cheap way to check whether a page"
+            " already exists or to browse. Use before wiki_ingest to avoid"
+            " duplicates."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms",
+                },
+                "k": {
+                    "type": "integer",
+                    "description": "Max hits to return (default: 10)",
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
+        },
+        handler=_search_adapter,
+    ),
+    Tool(
+        name="wiki_get",
+        description=("Fetch a single wiki page by slug (full frontmatter + body)."),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "The page slug to fetch",
+                },
+            },
+            "required": ["slug"],
+        },
+        handler=_get_adapter,
+    ),
+    Tool(
+        name="wiki_lint",
+        description=(
+            "Run lint checks on the wiki and retrieve violations + schema-refinement suggestions"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "confidence_threshold": {
+                    "type": "number",
+                    "description": (
+                        "Minimum confidence (0.0–1.0) for violations to report (default: 0.5)"
+                    ),
+                    "default": 0.5,
+                },
+            },
+        },
+        handler=_lint_adapter,
+    ),
+    Tool(
+        name="wiki_graph_stats",
+        description=(
+            "Return knowledge graph vertex/edge counts (entities, facts, schemas, passages)"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=_graph_stats_adapter,
+    ),
+    Tool(
+        name="wiki_resolve_conflicts",
+        description=(
+            "Detect fact contradictions in the knowledge graph — facts sharing "
+            "(head, relation) but with different tails"
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=_resolve_conflicts_adapter,
+    ),
+)
+
+TOOL_REGISTRY: dict[str, Tool] = {t.name: t for t in TOOLS}
+
+
+def wiki_mcp_tools() -> list[dict[str, Any]]:
+    """Return MCP tool definitions derived from the tool registry."""
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "inputSchema": t.input_schema,
+        }
+        for t in TOOLS
+    ]

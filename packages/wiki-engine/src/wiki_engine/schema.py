@@ -15,6 +15,7 @@ from .page import parse_page
 
 if TYPE_CHECKING:
     from .page import Page
+    from .source import Source
 
 __all__ = [
     "WikiSchema",
@@ -25,8 +26,6 @@ __all__ = [
     "enforce_source_kind",
     "enforce_honesty_category",
     "get_lint_threshold",
-    "get_off_limits_categories",
-    "validate_ingestion_category",
 ]
 
 _DEFAULT_PAGE_TYPES = ("source", "entity", "concept")
@@ -59,6 +58,36 @@ class WikiSchema:
     log_append_triggers: tuple[str, ...] = ("on_ingest", "on_lint_violation")
     lint_thresholds: Mapping[str, float | int] = field(default_factory=dict)
     honesty_rules: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def off_limits_categories(self) -> tuple[str, ...]:
+        """Categories that may never be ingested for this seat.
+
+        The single canonical source of truth for off-limits: the
+        ``honesty_rules.off_limits_categories`` key. No other key is recognized.
+        """
+        return tuple(self.honesty_rules.get("off_limits_categories", ()))
+
+    def enforce_source(self, source: Source) -> None:
+        """Validate a source against the rulebook before ingest does any work.
+
+        Currently the source-kind allow-list. Off-limits *categories* are handled
+        as a soft exclusion (skip, don't raise) by ``ingest`` so the page is never
+        written; raising here would change that contract.
+        """
+        enforce_source_kind(str(source.kind), self)
+
+    def enforce_page(self, page: Page) -> None:
+        """Run the full page ruleset in one defined order, before persisting.
+
+        type-frontmatter -> category allow-list -> honesty (off-limits). Each step
+        raises ``SchemaError`` on the first violation. This is the single entry
+        point callers should use; the underlying ``enforce_*`` functions remain
+        public for targeted use and testing.
+        """
+        enforce_page_type_frontmatter(page, self)
+        enforce_page_category(page, self)
+        enforce_honesty_category(page, self)
 
 
 def parse_schema(text: str) -> WikiSchema:
@@ -208,14 +237,16 @@ def enforce_honesty_category(page: Page, schema: WikiSchema) -> None:
 
     Raises SchemaError if category is in the off-limits list.
     """
-    off_limits = schema.honesty_rules.get("off_limits_categories", [])
+    off_limits = schema.off_limits_categories
     category = page.frontmatter.get("category")
     # None category is never off-limits
     if category is None:
         return
 
     if category in off_limits:
-        raise SchemaError(f"Page '{page.slug}' category '{category}' is off-limits: {off_limits}")
+        raise SchemaError(
+            f"Page '{page.slug}' category '{category}' is off-limits: {list(off_limits)}"
+        )
 
 
 def get_lint_threshold(
@@ -223,37 +254,3 @@ def get_lint_threshold(
 ) -> float | int:
     """Get a lint threshold from schema, or use the default."""
     return schema.lint_thresholds.get(threshold_name, default)
-
-
-def get_off_limits_categories(schema_rules: Mapping[str, Any]) -> list[str]:
-    """Extract off-limits category list from schema/AGENTS.md rules.
-
-    Schema format: under `off_limits`, list categories that cannot be ingested.
-
-    Args:
-        schema_rules: parsed schema dict
-
-    Returns:
-        List of category names (e.g. ["confidential", "legal"])
-    """
-    return list(schema_rules.get("off_limits", []))
-
-
-def validate_ingestion_category(
-    page_category: str,
-    schema_rules: Mapping[str, Any],
-) -> None:
-    """Validate that a page's category is not off-limits.
-
-    Args:
-        page_category: the category from the page frontmatter
-        schema_rules: parsed schema dict
-
-    Raises:
-        SchemaError: if category is off-limits
-    """
-    off_limits = get_off_limits_categories(schema_rules)
-    if page_category in off_limits:
-        raise SchemaError(
-            f"Category '{page_category}' is off-limits for this seat and cannot be ingested"
-        )

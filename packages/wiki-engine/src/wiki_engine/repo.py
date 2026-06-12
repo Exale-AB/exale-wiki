@@ -10,9 +10,11 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import catalog as _catalog
+from .log import LogEntry, format_entry
 from .page import Page, parse_page, render_page
 
-__all__ = ["Committer", "WikiRepo"]
+__all__ = ["Committer", "WikiRepo", "WikiTxn"]
 
 Committer = Callable[[Path, str], None]
 
@@ -126,3 +128,66 @@ class WikiRepo:
 
     def commit(self, message: str) -> None:
         self._committer(self.root, message)
+
+    @contextmanager
+    def transaction(self, message: str, *, timeout: float = 10.0) -> Iterator[WikiTxn]:
+        """Atomic write transaction: lock → caller body → index/log/commit.
+
+        Acquires the write lock, yields a ``WikiTxn`` mutation recorder, and on
+        clean exit coalesces buffered catalog entries into a single ``index.md``
+        write, appends buffered log lines, and commits with *message*.
+
+        If the body calls ``txn.abort()`` or raises an exception, no index/log
+        writes or commit happen. An exception propagates after the lock is
+        released; an abort exits silently.
+
+        Note: the lock is held for the entire body — keep slow model/embedding
+        calls **outside** the ``with`` block.
+        """
+        with self.write_lock(timeout=timeout):
+            txn = WikiTxn(self)
+            yield txn
+            if txn.aborted:
+                return
+            if txn._entries is not None:
+                self.write_index(_catalog.render_index(txn._entries))
+            for line in txn._log_lines:
+                self.append_log(line)
+            self.commit(message)
+
+
+class WikiTxn:
+    """Mutation recorder bound to a ``WikiRepo.transaction()`` block.
+
+    Buffers catalog and log mutations so the enclosing context manager can
+    write them atomically on commit. Page writes (``put_page``) are immediate
+    — they hit the filesystem inside the held lock.
+    """
+
+    def __init__(self, repo: WikiRepo) -> None:
+        self._repo = repo
+        self._entries: list[_catalog.CatalogEntry] | None = None
+        self._log_lines: list[str] = []
+        self._aborted = False
+
+    @property
+    def aborted(self) -> bool:
+        return self._aborted
+
+    def put_page(self, page: Page) -> None:
+        """Write a page to the wiki directory (immediate filesystem write)."""
+        self._repo.write_page(page)
+
+    def catalog(self, entry: _catalog.CatalogEntry) -> None:
+        """Buffer a catalog entry. Index is parsed once; written once on commit."""
+        if self._entries is None:
+            self._entries = _catalog.parse_index(self._repo.read_index())
+        self._entries = _catalog.upsert_entry(self._entries, entry)
+
+    def log(self, entry: LogEntry) -> None:
+        """Buffer a log line. Written on commit."""
+        self._log_lines.append(format_entry(entry))
+
+    def abort(self) -> None:
+        """Mark the transaction as aborted — no commit on exit."""
+        self._aborted = True

@@ -15,6 +15,42 @@ from wiki_engine.schema import (
 )
 
 
+def test_off_limits_categories_reads_canonical_key_only():
+    """WikiSchema.off_limits_categories reads off_limits_categories only."""
+    canonical = WikiSchema(honesty_rules={"off_limits_categories": ["a", "b"]})
+    assert canonical.off_limits_categories == ("a", "b")
+    # The legacy top-level 'off_limits' key is no longer recognized.
+    assert WikiSchema(honesty_rules={"off_limits": ["a"]}).off_limits_categories == ()
+    assert WikiSchema().off_limits_categories == ()
+
+
+def test_schema_enforce_page_runs_full_ruleset():
+    """schema.enforce_page is the single entry point: type + category + honesty."""
+    # honesty violation surfaces through the one call
+    honesty = WikiSchema(honesty_rules={"off_limits_categories": ["secret"]})
+    page = Page(slug="p", frontmatter={"type": "source", "category": "secret"}, body="x")
+    with pytest.raises(SchemaError, match="off-limits"):
+        honesty.enforce_page(page)
+
+    # required-frontmatter violation surfaces through the same call
+    typed = WikiSchema(
+        page_type_rules={"source": PageTypeRule(required_frontmatter_fields=("type", "author"))}
+    )
+    page2 = Page(slug="p", frontmatter={"type": "source", "category": "general"}, body="x")
+    with pytest.raises(SchemaError, match="missing required frontmatter"):
+        typed.enforce_page(page2)
+
+
+def test_schema_enforce_source_checks_source_kind():
+    """schema.enforce_source rejects a disallowed source kind."""
+    from wiki_engine.source import Source, SourceKind
+
+    schema = WikiSchema(allowed_source_kinds=("email",))
+    src = Source(kind=SourceKind.MESSAGE, identifier="m", text="t", title="T")
+    with pytest.raises(SchemaError, match="is not allowed"):
+        schema.enforce_source(src)
+
+
 def test_enforce_page_type_requires_frontmatter_fields():
     """enforce_page_type_frontmatter validates required fields."""
     schema = WikiSchema(

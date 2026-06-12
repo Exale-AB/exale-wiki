@@ -5,9 +5,16 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 
+from .protocols import ExtractedFacts
 from .source import Source
 
-__all__ = ["FakeAnswerer", "FakeEmbedder", "FakeSummarizer"]
+__all__ = [
+    "FakeAnswerer",
+    "FakeConflictResolver",
+    "FakeEmbedder",
+    "FakeFactExtractor",
+    "FakeSummarizer",
+]
 
 _MAX_SNIPPET = 200
 _ANSWER_MAX = 500
@@ -42,6 +49,30 @@ class FakeEmbedder:
             bucket = int(hashlib.sha256(token.encode()).hexdigest(), 16) % self.dim
             vector[bucket] += 1.0
         return vector
+
+
+class FakeFactExtractor:
+    """No-op extractor: returns empty entities and facts (no spaCy/LLM needed)."""
+
+    def extract(self, text: str) -> ExtractedFacts:
+        return ExtractedFacts(entities=(), facts=())
+
+
+class FakeConflictResolver:
+    """No-op resolver: returns keep_both for every conflict (no LLM needed)."""
+
+    def resolve(self, conflicts: list, repo: object = None) -> list:
+        from .conflicts import Resolution
+
+        return [
+            Resolution(
+                conflict=c,
+                action="keep_both",
+                resolved_fact=None,
+                reason="fake resolver",
+            )
+            for c in conflicts
+        ]
 
 
 class FakeAnswerer:

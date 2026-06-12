@@ -7,7 +7,14 @@ runtime. These tests pin the enforcement to the seat's schema/AGENTS.md.
 
 from pathlib import Path
 
-from wiki_engine.mcp_server import handle_wiki_ingest, handle_wiki_lint
+import wiki_engine as we
+from wiki_engine.mcp_server import (
+    TOOL_REGISTRY,
+    TOOLS,
+    handle_wiki_ingest,
+    handle_wiki_lint,
+    wiki_mcp_tools,
+)
 from wiki_engine.repo import WikiRepo
 
 _SCHEMA = """\
@@ -85,3 +92,34 @@ def test_lint_loads_seat_schema(tmp_path: Path):
     out = handle_wiki_lint(repo)
 
     assert "violations" in out and "suggestions" in out
+
+
+# --- T13: registry anti-drift guards ----------------------------------------
+
+
+def test_every_advertised_tool_is_dispatchable():
+    """Every tool in wiki_mcp_tools() has a handler in the registry."""
+    advertised = {t["name"] for t in wiki_mcp_tools()}
+    registered = set(TOOL_REGISTRY)
+    assert advertised == registered
+
+
+def test_tools_list_matches_registry_order():
+    """wiki_mcp_tools() names match TOOLS tuple, in order."""
+    from_list = [t["name"] for t in wiki_mcp_tools()]
+    from_registry = [t.name for t in TOOLS]
+    assert from_list == from_registry
+
+
+def test_all_handle_functions_exported():
+    """Every handle_wiki_* function is reachable from the package public API."""
+    handle_names = [
+        "handle_wiki_query",
+        "handle_wiki_ingest",
+        "handle_wiki_context",
+        "handle_wiki_search",
+        "handle_wiki_get",
+        "handle_wiki_lint",
+    ]
+    for name in handle_names:
+        assert hasattr(we, name), f"{name} not exported from wiki_engine"
