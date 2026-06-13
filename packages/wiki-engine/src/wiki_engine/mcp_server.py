@@ -45,6 +45,7 @@ class ToolContext:
     vectorstore: VectorStore
     answerer: Answerer
     summarizer: Summarizer | None = None
+    extractor: Any = None
     graph: Any = None
 
 
@@ -226,6 +227,8 @@ def handle_wiki_ingest(
     embedder: Embedder | None = None,
     store: VectorStore | None = None,
     contributor: str | None = None,
+    extractor: Any = None,
+    graph: Any = None,
 ) -> dict[str, Any]:
     """Ingest a source into the wiki.
 
@@ -291,6 +294,8 @@ def handle_wiki_ingest(
         embedder=embedder,
         store=store,
         contributor=contributor,
+        extractor=extractor,
+        graph=graph,
     )
 
     # Read the page to get the sources_merged count
@@ -403,6 +408,34 @@ def handle_wiki_resolve_conflicts(
 # ── Tool registry: single source of truth for name → schema → handler ──────
 
 
+def _update_graph_for_page(graph: Any, repo: Any, slug: str) -> None:
+    """Update the knowledge graph for a single page after ingest."""
+    from .protocols import Entity, ExtractedFacts, Fact
+
+    page = repo.read_page(slug)
+    if page is None:
+        return
+    entities_raw = page.frontmatter.get("entities", [])
+    facts_raw = page.frontmatter.get("facts", [])
+    if not entities_raw and not facts_raw:
+        return
+    entities = tuple(
+        Entity(text=e["text"], entity_type=e["entity_type"]) for e in entities_raw
+    )
+    facts = tuple(
+        Fact(
+            head=f["head"],
+            relation=f["relation"],
+            tail=f["tail"],
+            head_type=f["head_type"],
+            tail_type=f["tail_type"],
+        )
+        for f in facts_raw
+    )
+    graph.update(slug, ExtractedFacts(entities=entities, facts=facts))
+    graph.save()
+
+
 def _query_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     return handle_wiki_query(
         repo=ctx.repo,
@@ -415,7 +448,7 @@ def _query_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ingest_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
-    return handle_wiki_ingest(
+    result = handle_wiki_ingest(
         repo=ctx.repo,
         source_text=args.get("source_text"),
         source_url=args.get("source_url"),
@@ -424,7 +457,12 @@ def _ingest_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         embedder=ctx.embedder,
         store=ctx.vectorstore,
         contributor=args.get("contributor"),
+        extractor=ctx.extractor,
+        graph=ctx.graph,
     )
+    if ctx.graph is not None:
+        ctx.graph.save()
+    return result
 
 
 def _context_adapter(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
