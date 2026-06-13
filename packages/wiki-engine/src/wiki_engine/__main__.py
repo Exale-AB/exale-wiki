@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .embed_backends import build_retrieval
+from .knowledge_graph import WikiGraph
 from .llm_backends import build_judgment
 from .mcp_server import TOOL_REGISTRY, ToolContext, wiki_mcp_tools
 from .repo import WikiRepo
@@ -25,12 +26,35 @@ def main() -> None:
     # judgment steps (summarize/answer) come from the Hermes-configured model.
     embedder, vectorstore = build_retrieval()
     summarizer, answerer = build_judgment()
+
+    graph = WikiGraph(path=Path(wiki_repo_path) / "graph.graphml")
+    graph.rebuild(repo)
+
+    # Fact extraction: spaCy NER seeds entities, LLM refines into structured facts.
+    # Degrades to None (no extraction) if spaCy or openai is missing.
+    extractor = None
+    try:
+        from .extraction import SpacyNerLlmExtractor
+        from .llm_backends import OpenAICompatibleClient
+
+        llm_base = os.environ.get("WIKI_LLM_BASE_URL", "http://127.0.0.1:8645/v1")
+        llm_model = os.environ.get("WIKI_LLM_MODEL", "minimax/minimax-m3")
+        llm_key = os.environ.get("WIKI_LLM_API_KEY", "hermes")
+        client = OpenAICompatibleClient(
+            base_url=llm_base, model=llm_model, api_key=llm_key,
+        )
+        extractor = SpacyNerLlmExtractor(llm_client=client)
+    except Exception:
+        pass
+
     ctx = ToolContext(
         repo=repo,
         embedder=embedder,
         vectorstore=vectorstore,
         answerer=answerer,
         summarizer=summarizer,
+        extractor=extractor,
+        graph=graph,
     )
 
     # Expose tools via stdin/stdout protocol (standard MCP)

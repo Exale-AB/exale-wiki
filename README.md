@@ -136,9 +136,10 @@ hermes mcp add wiki-engine --command /path/to/wiki-mcp-server.sh
 hermes mcp test wiki-engine
 ```
 
-The MCP server wires `FakeEmbedder` + `FakeVectorStore` by default —
-structural-only retrieval, no database needed. For full hybrid retrieval,
-configure `WIKI_DB_URL` and the `[embed]` extra.
+The MCP server auto-detects available backends via `build_retrieval()`:
+when `WIKI_DB_URL` is set and `fastembed` is installed, it uses
+`LocalEmbedder` + `PgVectorStore` (full hybrid retrieval). Otherwise it
+degrades gracefully to structural-only retrieval with no database needed.
 
 ## Local deployment
 
