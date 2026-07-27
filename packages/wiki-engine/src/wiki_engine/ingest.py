@@ -1,7 +1,9 @@
-"""The ingest operation: source -> summary page + index/log updates.
+"""The ingest operation: source -> page (summary, or verbatim for documents) + index/log updates.
 
 Idempotent (dedup by source identity) and off-limits-aware. The single judgment
 step (summarize) is injected; everything else is deterministic bookkeeping.
+Sources whose category is in ``schema.verbatim_categories`` (default ``document``)
+are stored in full instead of summarized, so dense documents like CVs stay matchable.
 """
 
 from __future__ import annotations
@@ -98,9 +100,15 @@ def ingest(
     if not slug:
         raise IngestError(f"source title produces an empty slug: {source.title!r}")
 
-    summary = summarizer.summarize(source)
-    embedding = embedder.embed([summary])[0] if embedder is not None and store is not None else None
-    extracted = extractor.extract(summary) if extractor is not None else None
+    # Verbatim categories (e.g. "document") are stored in full so dense sources
+    # like CVs stay matchable — the summary would drop skills/certs/experience.
+    # Everything else gets the injected summary. The page category equals
+    # ``schema.default_category`` (set per-ingest by the caller), so that is what
+    # decides verbatim storage.
+    verbatim = schema.default_category in schema.verbatim_categories
+    body = source.text if verbatim else summarizer.summarize(source)
+    embedding = embedder.embed([body])[0] if embedder is not None and store is not None else None
+    extracted = extractor.extract(body) if extractor is not None else None
 
     # Serialize the dedup check + filesystem/git writes so concurrent ingests from
     # multiple workflows don't race on the manifest/index/log or the git index. The
@@ -136,7 +144,7 @@ def ingest(
                 }
                 for f in extracted.facts
             ]
-        page = Page(slug=slug, frontmatter=frontmatter, body=summary)
+        page = Page(slug=slug, frontmatter=frontmatter, body=body)
         schema.enforce_page(page)
         txn.put_page(page)
 
@@ -151,7 +159,7 @@ def ingest(
                 title=source.title,
                 slug=slug,
                 category=schema.default_category,
-                summary=(summary.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
+                summary=(body.splitlines() or [""])[0][:_SUMMARY_LINE_MAX],
             )
         )
         txn.log(LogEntry(date=date, op="ingest", title=source.title))

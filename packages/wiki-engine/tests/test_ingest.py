@@ -51,6 +51,56 @@ def test_ingest_creates_page_index_and_log(tmp_path: Path):
     assert log == [type(log[0])("2026-06-04", "ingest", "Acme Renewal")]
 
 
+class _BoomSummarizer:
+    """A summarizer that must never be called (verbatim ingest skips summarizing)."""
+
+    def summarize(self, source):  # noqa: ARG002
+        raise AssertionError("verbatim-category ingest must not summarize")
+
+
+def test_ingest_document_category_stores_full_text_verbatim(tmp_path: Path):
+    repo = _repo(tmp_path)
+    # "document" is a verbatim category by default: the whole source is stored,
+    # and the summarizer is not invoked at all.
+    ingest(
+        _source(),
+        repo=repo,
+        schema=WikiSchema(default_category="document"),
+        summarizer=_BoomSummarizer(),
+    )
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    assert page.body.strip() == "Acme renewed for Q3.\nDetails follow."
+    assert not page.body.startswith("Summary of")
+
+
+def test_ingest_custom_verbatim_category_stores_full_text(tmp_path: Path):
+    repo = _repo(tmp_path)
+    ingest(
+        _source(),
+        repo=repo,
+        schema=WikiSchema(default_category="cv", verbatim_categories=("cv",)),
+        summarizer=_BoomSummarizer(),
+    )
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    assert page.body.strip() == "Acme renewed for Q3.\nDetails follow."
+
+
+def test_ingest_non_verbatim_category_still_summarizes(tmp_path: Path):
+    repo = _repo(tmp_path)
+    ingest(
+        _source(),
+        repo=repo,
+        schema=WikiSchema(default_category="Accounts"),
+        summarizer=FakeSummarizer(),
+    )
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    assert page.body.startswith("Summary of Acme Renewal")
+    assert "Details follow." not in page.body
+
+
 def test_ingest_stores_raw_copy_and_manifest(tmp_path: Path):
     repo = _repo(tmp_path)
     source = _source()

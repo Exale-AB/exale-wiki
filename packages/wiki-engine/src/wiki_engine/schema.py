@@ -58,6 +58,7 @@ class WikiSchema:
     log_append_triggers: tuple[str, ...] = ("on_ingest", "on_lint_violation")
     lint_thresholds: Mapping[str, float | int] = field(default_factory=dict)
     honesty_rules: Mapping[str, Any] = field(default_factory=dict)
+    verbatim_categories: tuple[str, ...] = ("document",)
 
     @property
     def off_limits_categories(self) -> tuple[str, ...]:
@@ -166,6 +167,14 @@ def parse_schema(text: str) -> WikiSchema:
     if not isinstance(honesty_rules, dict):
         raise SchemaError("honesty_rules must be a dict")
 
+    # Parse verbatim_categories — categories whose sources are stored in full
+    # (no summarization), so documents like CVs remain matchable verbatim.
+    verbatim_categories = frontmatter.get("verbatim_categories", ["document"])
+    if not isinstance(verbatim_categories, list) or not all(
+        isinstance(c, str) for c in verbatim_categories
+    ):
+        raise SchemaError("verbatim_categories must be a list of strings")
+
     return WikiSchema(
         default_category=default_category,
         page_types=tuple(page_types),
@@ -175,6 +184,7 @@ def parse_schema(text: str) -> WikiSchema:
         log_append_triggers=tuple(log_append_triggers),
         lint_thresholds=lint_thresholds,
         honesty_rules=honesty_rules,
+        verbatim_categories=tuple(verbatim_categories),
     )
 
 
