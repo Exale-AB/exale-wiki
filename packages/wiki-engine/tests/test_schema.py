@@ -23,6 +23,22 @@ def test_rejects_non_string_default_category():
         parse_schema("---\ndefault_category: 3\n---\n")
 
 
+def test_verbatim_categories_default():
+    schema = parse_schema("# Rulebook\n\nProse only.\n")
+    assert schema.verbatim_categories == ("document",)
+
+
+def test_parses_verbatim_categories():
+    text = "---\nverbatim_categories: [document, cv]\n---\n\n# Rulebook\n"
+    schema = parse_schema(text)
+    assert schema.verbatim_categories == ("document", "cv")
+
+
+def test_rejects_non_string_verbatim_categories():
+    with pytest.raises(SchemaError, match="verbatim_categories"):
+        parse_schema("---\nverbatim_categories: [1, 2]\n---\n")
+
+
 def test_rejects_non_string_page_types():
     with pytest.raises(SchemaError, match="page_types"):
         parse_schema("---\npage_types: [1, 2]\n---\n")

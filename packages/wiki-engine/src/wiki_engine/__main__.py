@@ -103,7 +103,9 @@ def handle_request(request: dict, ctx: ToolContext) -> dict:
             "jsonrpc": "2.0",
             "result": {
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                # Advertise the tools capability so MCP clients (Hermes) query
+                # tools/list; an empty capabilities dict makes them discover 0 tools.
+                "capabilities": {"tools": {}},
                 "serverInfo": {
                     "name": "wiki-engine",
                     "version": "0.1.0",

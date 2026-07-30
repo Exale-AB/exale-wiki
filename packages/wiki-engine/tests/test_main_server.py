@@ -52,6 +52,13 @@ def test_initialize_returns_server_info(tmp_path: Path):
     assert resp["id"] == 1
 
 
+def test_initialize_advertises_tools_capability(tmp_path: Path):
+    # An empty capabilities dict makes MCP clients (Hermes) skip tools/list and
+    # discover zero tools; the server must advertise the tools capability.
+    resp = _call(tmp_path, {"id": 1, "method": "initialize"})
+    assert "tools" in resp["result"]["capabilities"]
+
+
 def test_tools_list_lists_all_tools(tmp_path: Path):
     resp = _call(tmp_path, {"id": 2, "method": "tools/list"})
     names = {t["name"] for t in resp["result"]["tools"]}
