@@ -14,6 +14,27 @@ This is a [uv](https://docs.astral.sh/uv/) workspace with three members under `p
 - `wiki-utils` — `log_action` logging helpers used by seat skill bundles.
 - `wiki-validation` — least-privilege scope checks for seat skill bundles.
 
+## Exale repositories (organization map)
+
+Exale AB (https://github.com/Exale-AB) builds its AI-employee platform across **four sibling
+repositories**, cloned side by side on the dev machine. When working in any one of them, assume
+the other three also exist locally at the paths below — features often span more than one.
+
+| Repo (GitHub) | Local path | Role |
+|---|---|---|
+| `Exale-AB/exale-wiki` | `~/projects/exale` | **Wiki engine** — pure-Python Self-Improving Knowledge Wiki; ships the `wiki-engine` MCP server. No Hermes import. |
+| `Exale-AB/exale-hermes` | `~/projects/exale-hermes` | **Agent skills** — Hermes skill bundles + libraries (inbox-triage, follow-up, knowledge-wiki, pipeline-watchdog…) orchestrated over MCP. |
+| `Exale-AB/exale-infra` | `~/projects/exale-infra` | **Infrastructure** — per-seat VPS provisioning, deployment (Hetzner/Ansible), and studio operator tooling. |
+| `Exale-AB/exale-local` | `~/projects/exale-local/myagent` | **Local seat** — a runnable Hermes deployment seat wiring engine + bundles on a local machine treated as a VPS. |
+
+How they fit together: `exale-infra` provisions a **seat** (a VPS running one **Hermes** agent);
+that agent loads bundles from `exale-hermes`, which call the `wiki-engine` MCP server from
+`exale-wiki` and install its packages into the Hermes venv; `exale-local` is a concrete seat for
+local dev/demo using the same wiring on localhost. The wiki **data** (markdown knowledge base +
+graph) is not in this org — it lives per-seat at `~/.exale` as its own git-versioned store.
+
+**You are currently in: `Exale-AB/exale-wiki` (this is the wiki engine repo).**
+
 ## Commands
 
 ```bash
