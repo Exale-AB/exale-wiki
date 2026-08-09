@@ -82,6 +82,20 @@ class WikiRepo:
     def schema_dir(self) -> Path:
         return self.root / "schema"
 
+    @property
+    def graph_path(self) -> Path:
+        """Where the derived knowledge graph is persisted.
+
+        The repo owns this because two callers used to compute it themselves and
+        disagreed: the MCP server wrote the repo root, the reindex CLI wrote
+        `wiki/`. Nothing read the CLI's copy, so it accumulated stale vertices
+        forever and came back on every run after being deleted.
+
+        Beside the content rather than inside it: `wiki/` is the system of
+        record, and this file is derived and rebuildable from page frontmatter.
+        """
+        return self.root / "graph.graphml"
+
     @classmethod
     def init(cls, root: Path, *, committer: Committer = _git_commit) -> WikiRepo:
         repo = cls(root, committer=committer)

@@ -74,6 +74,14 @@ synthesized answers**: the calling agent (Hermes) writes the final natural-langu
 `schema/` (the rulebook). Every operation ends with `repo.commit(...)`. The `committer`
 is injectable so tests avoid real git (`_git_commit` is `# pragma: no cover`).
 
+The derived knowledge graph lives at **`repo.graph_path`** — the repo root, beside
+`wiki/` rather than inside it, because `wiki/` is the system of record and the graph is
+rebuildable from page frontmatter. **`WikiRepo` owns that path so two callers cannot
+disagree about it again**: the MCP server and the reindex CLI each computed it
+themselves and wrote different files, and nothing ever read the CLI's copy. It
+accumulated stale vertices indefinitely and reappeared on every run after being deleted.
+`prune_legacy_graph()` removes the orphan and both entry points call it.
+
 ### The three operations
 - **ingest** (`ingest.py`): source → summary page + index/log updates. Idempotent via
   `Source.identity()` (sha256 of kind+identifier+text); skips already-seen sources and
