@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .knowledge_graph import WikiGraph
+from .knowledge_graph import WikiGraph, prune_legacy_graph
 from .page import Page
 from .protocols import FactExtractor
 from .repo import WikiRepo
@@ -52,7 +52,9 @@ def reindex_facts(
     force: bool = False,
 ) -> ReindexFactsResult:
     """Extract facts for all pages and rebuild the graph."""
-    graph = WikiGraph(path=graph_path)
+    # Default to the repo's own path. This used to be decided by the caller, and
+    # the CLI chose a different file from the MCP server.
+    graph = WikiGraph(path=repo.graph_path if graph_path is None else graph_path)
     processed = 0
     failed = 0
 
@@ -112,7 +114,9 @@ def main() -> None:  # pragma: no cover
     args = parser.parse_args()
 
     repo = WikiRepo(Path(os.environ.get("WIKI_REPO_PATH", "wiki")))
-    graph_path = repo.wiki_dir / "graph.graphml"
+    removed = prune_legacy_graph(repo)
+    if removed is not None:
+        print(f"[reindex_facts] removed orphaned graph at {removed}", file=sys.stderr)
 
     try:
         from .extraction import SpacyNerLlmExtractor
@@ -130,7 +134,9 @@ def main() -> None:  # pragma: no cover
             file=sys.stderr,
         )
 
-    result = reindex_facts(repo, extractor, graph_path=graph_path, force=args.force)
+    # No graph_path: it now defaults to repo.graph_path, so the CLI and the MCP
+    # server cannot pick different files (#19).
+    result = reindex_facts(repo, extractor, force=args.force)
     if result.failed:
         print(
             f"[reindex_facts] {result.failed} page(s) left untouched — extraction failed. "

@@ -74,6 +74,14 @@ synthesized answers**: the calling agent (Hermes) writes the final natural-langu
 `schema/` (the rulebook). Every operation ends with `repo.commit(...)`. The `committer`
 is injectable so tests avoid real git (`_git_commit` is `# pragma: no cover`).
 
+The derived knowledge graph lives at **`repo.graph_path`** — the repo root, beside
+`wiki/` rather than inside it, because `wiki/` is the system of record and the graph is
+rebuildable from page frontmatter. **`WikiRepo` owns that path so two callers cannot
+disagree about it again**: the MCP server and the reindex CLI each computed it
+themselves and wrote different files, and nothing ever read the CLI's copy. It
+accumulated stale vertices indefinitely and reappeared on every run after being deleted.
+`prune_legacy_graph()` removes the orphan and both entry points call it.
+
 ### The three operations
 - **ingest** (`ingest.py`): source → summary page + index/log updates. Idempotent via
   `Source.identity()` (sha256 of kind+identifier+text); skips already-seen sources and
@@ -130,14 +138,16 @@ disk onto the current canonical vocabulary. No model, no tokens, idempotent, and
 it imports nothing optional so it runs on a seat with neither spaCy nor an LLM
 client.
 
-It exists because **`reindex_facts --force` cannot do this job.** That CLI only
-overwrites a page's facts when re-extraction returns some, and relation
-extraction returns an empty tuple both when it fails and when the text genuinely
-has no relations — so a page whose extraction times out keeps its old records
-verbatim while still being rewritten, mtime and all. After the vocabulary
-changed, twelve pages on one seat survived a full `--force` run unchanged. Reach
-for `relabel` after any change to the canonical map; reach for `reindex_facts`
-only when you actually want new extraction.
+It exists because **`reindex_facts --force` is the wrong tool for a vocabulary
+change.** It spends tokens re-extracting content that has not changed, and a page
+whose extraction fails is left untouched by design (see Gotchas), so its old
+types survive the run. Historically it was worse: a failed extraction and an
+empty one were indistinguishable, so twelve pages on one seat kept stale records
+through a full `--force` run while their mtimes claimed otherwise. That part is
+fixed; the token cost and the untouched-on-failure behaviour are not bugs.
+
+Reach for `relabel` after any change to the canonical map. Reach for
+`reindex_facts` only when you actually want new extraction.
 
 ## Local deployment (native, no Docker)
 

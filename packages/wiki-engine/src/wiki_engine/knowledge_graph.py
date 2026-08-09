@@ -14,7 +14,31 @@ import igraph as ig  # type: ignore[import-untyped]
 
 from .protocols import Entity, ExtractedFacts, Fact
 
-__all__ = ["WikiGraph"]
+# The reindex CLI used to write the graph here, inside the content directory.
+# Nothing ever read it back except the next CLI run, which accumulated into it
+# without rebuilding, so stale vertices survived indefinitely. `WikiRepo.graph_path`
+# is the one true location now; this name exists only to clean up after the old one.
+LEGACY_GRAPH_FILENAME = "graph.graphml"
+
+__all__ = ["LEGACY_GRAPH_FILENAME", "WikiGraph", "prune_legacy_graph"]
+
+
+def prune_legacy_graph(repo: Any) -> Path | None:
+    """Delete the orphaned `wiki/graph.graphml`, if one is there.
+
+    Safe to do rather than merely warn about: the file is derived, nothing reads
+    it, and the live graph is rebuilt from page frontmatter. Both production
+    seats had one deleted by hand twice, and it came back on the next run each
+    time — so the cleanup belongs where the recreation used to happen.
+
+    Deliberately narrow: it removes exactly that one path and never
+    `repo.graph_path`.
+    """
+    orphan = repo.wiki_dir / LEGACY_GRAPH_FILENAME
+    if orphan == repo.graph_path or not orphan.is_file():
+        return None
+    orphan.unlink()
+    return orphan
 
 
 def _normalize(name: str) -> str:

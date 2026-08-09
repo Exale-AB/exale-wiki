@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .embed_backends import build_retrieval
-from .knowledge_graph import WikiGraph
+from .knowledge_graph import WikiGraph, prune_legacy_graph
 from .llm_backends import build_judgment
 from .mcp_server import TOOL_REGISTRY, ToolContext, wiki_mcp_tools
 from .repo import WikiRepo
@@ -27,7 +27,8 @@ def main() -> None:
     embedder, vectorstore = build_retrieval()
     summarizer, answerer = build_judgment()
 
-    graph = WikiGraph(path=Path(wiki_repo_path) / "graph.graphml")
+    prune_legacy_graph(repo)
+    graph = WikiGraph(path=repo.graph_path)
     graph.rebuild(repo)
 
     # Fact extraction: spaCy NER seeds entities, LLM refines into structured facts.
