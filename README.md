@@ -67,6 +67,10 @@ are normalised onto one canonical vocabulary (`PRS` and `PERSON` both become
 one entity type in the graph. A model that is not installed degrades to the
 default language with a warning rather than failing ingest.
 
+Persisted types can be brought onto the current vocabulary without re-extraction:
+`python -m wiki_engine.relabel --write`. Pure data migration — no model, no
+tokens, idempotent — for when the canonical map changes.
+
 ### Three-layer memory (MemGraphRAG-inspired)
 
 Inspired by the [MemGraphRAG](https://arxiv.org/abs/2312.00216) (KDD 2026) architecture:

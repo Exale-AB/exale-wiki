@@ -2,6 +2,21 @@
 
 python -m wiki_engine.reindex_facts        # process all pages
 python -m wiki_engine.reindex_facts --force # re-extract even if facts exist
+
+`--force` means re-extract from scratch, so a page whose extraction returns
+nothing has its records *cleared*. It used to preserve them, because a failed
+extraction and an empty one were the same empty tuple — so a page that timed out
+kept its old records while still being rewritten, and the mtime claimed
+otherwise. Twelve pages on one seat survived a full --force run that way.
+
+A page whose extraction actually fails is now left untouched and counted in
+`ReindexFactsResult.failed`. Untouched rather than cleared, because a transient
+timeout must not delete real facts, and rewriting it would move the mtime for
+nothing.
+
+Note the cost asymmetry: this CLI spends tokens. If all you need is to bring
+persisted types onto a changed vocabulary, `python -m wiki_engine.relabel` does
+that as a pure data migration.
 """
 
 from __future__ import annotations
@@ -23,6 +38,10 @@ __all__ = ["ReindexFactsResult", "reindex_facts"]
 class ReindexFactsResult:
     processed: int
     graph_vertices: int
+    # Pages whose relation extraction failed and were therefore left untouched.
+    # Reported so a run that converted less than it looks like cannot pass for a
+    # complete one — see the module docstring.
+    failed: int = 0
 
 
 def reindex_facts(
@@ -35,13 +54,27 @@ def reindex_facts(
     """Extract facts for all pages and rebuild the graph."""
     graph = WikiGraph(path=graph_path)
     processed = 0
+    failed = 0
 
     for page in repo.list_pages():
         if not force and page.frontmatter.get("facts"):
             continue
 
         extracted = extractor.extract(page.body)
+
+        # Extraction failed rather than finding nothing. Leave the page entirely
+        # alone: rewriting it would move the mtime while the records stayed
+        # stale, which is what let a --force run look complete when it was not.
+        # Untouched means a re-run picks it up again.
+        if extracted.relations_failed:
+            failed += 1
+            continue
+
         fm = dict(page.frontmatter)
+        # Assign unconditionally, so an empty result *clears* the old records
+        # rather than preserving them. That is what --force is asked to do.
+        fm.pop("entities", None)
+        fm.pop("facts", None)
         if extracted.entities:
             fm["entities"] = [
                 {"text": e.text, "entity_type": e.entity_type} for e in extracted.entities
@@ -67,6 +100,7 @@ def reindex_facts(
     return ReindexFactsResult(
         processed=processed,
         graph_vertices=graph.stats["entities"] + graph.stats["facts"],
+        failed=failed,
     )
 
 
@@ -99,6 +133,12 @@ def main() -> None:  # pragma: no cover
         )
 
     result = reindex_facts(repo, extractor, graph_path=graph_path, force=args.force)
+    if result.failed:
+        print(
+            f"[reindex_facts] {result.failed} page(s) left untouched — extraction failed. "
+            "Re-run to retry them.",
+            file=sys.stderr,
+        )
     print(
         f"reindex_facts: processed {result.processed} page(s), "
         f"{result.graph_vertices} graph vertices"

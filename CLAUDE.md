@@ -138,6 +138,21 @@ Ship the playbook change first. Model sizes: 54 MB + 72 MB per seat.
 Detection is weakest on very short text, which includes query-time extraction in
 `retrieval.py`.
 
+### Relabelling persisted types (`relabel.py`)
+`python -m wiki_engine.relabel [--write]` maps entity and fact types already on
+disk onto the current canonical vocabulary. No model, no tokens, idempotent, and
+it imports nothing optional so it runs on a seat with neither spaCy nor an LLM
+client.
+
+It exists because **`reindex_facts --force` cannot do this job.** That CLI only
+overwrites a page's facts when re-extraction returns some, and relation
+extraction returns an empty tuple both when it fails and when the text genuinely
+has no relations — so a page whose extraction times out keeps its old records
+verbatim while still being rewritten, mtime and all. After the vocabulary
+changed, twelve pages on one seat survived a full `--force` run unchanged. Reach
+for `relabel` after any change to the canonical map; reach for `reindex_facts`
+only when you actually want new extraction.
+
 ## Local deployment (native, no Docker)
 
 The running setup treats the local machine as a VPS — no Docker in the path:
@@ -174,6 +189,15 @@ design is legitimate history — put `HISTORICAL RECORD` in its first lines,
 pointing at what replaced it, and the currency checks skip it.
 
 ## Gotchas
+
+- **`reindex_facts --force` clears, and that is deliberate.** Force means
+  re-extract from scratch, so a page whose extraction returns nothing loses its
+  records. A page whose extraction *fails* is left untouched instead and counted
+  in `ReindexFactsResult.failed` — a timeout must not delete real facts. The two
+  used to be the same empty tuple, which is how twelve pages on a seat survived a
+  full `--force` run with stale records and fresh mtimes.
+- **`ExtractedFacts.relations_failed`** carries that distinction. It defaults to
+  `False`, so external `FactExtractor` implementations need no change.
 
 - **Dev-tool pins are exact** (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
   across machines; bump them deliberately. The full gate is green: `uv run pytest`,
