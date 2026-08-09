@@ -71,6 +71,13 @@ Persisted types can be brought onto the current vocabulary without re-extraction
 `python -m wiki_engine.relabel --write`. Pure data migration — no model, no
 tokens, idempotent — for when the canonical map changes.
 
+### Pages accumulate per source
+
+A page holds one body section per source (`## <date> — <identifier>`), and every
+entity and fact record carries the `source` it came from. Re-ingesting a source
+replaces only its own section and records; a failed extraction contributes
+nothing and leaves every other source untouched.
+
 ### Three-layer memory (MemGraphRAG-inspired)
 
 Inspired by the [MemGraphRAG](https://arxiv.org/abs/2312.00216) (KDD 2026) architecture:

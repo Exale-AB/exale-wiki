@@ -17,9 +17,11 @@ from .errors import IngestError
 from .log import LogEntry, today
 from .page import Page
 from .protocols import Embedder, FactExtractor, Summarizer
+from .records import merge_records
 from .repo import WikiRepo
 from .retrieval import VectorStore
 from .schema import WikiSchema
+from .sections import upsert_section
 from .slug import slugify
 from .source import Source
 
@@ -122,29 +124,59 @@ def ingest(
         _append_manifest(repo, source, date)
 
         existing = repo.read_page(slug)
+        sources = _merge_sources(existing, source.identifier)
         frontmatter: dict[str, object] = {
             "title": source.title,
             "type": "source",
             "category": schema.default_category,
-            "sources": _merge_sources(existing, source.identifier),
+            "sources": sources,
         }
         if contributor:
             frontmatter["contributor"] = contributor
-        if extracted is not None and (extracted.entities or extracted.facts):
-            frontmatter["entities"] = [
-                {"text": e.text, "entity_type": e.entity_type} for e in extracted.entities
-            ]
-            frontmatter["facts"] = [
-                {
-                    "head": f.head,
-                    "relation": f.relation,
-                    "tail": f.tail,
-                    "head_type": f.head_type,
-                    "tail_type": f.tail_type,
-                }
-                for f in extracted.facts
-            ]
-        page = Page(slug=slug, frontmatter=frontmatter, body=body)
+
+        # Accumulate rather than replace. The body used to be the newest source's
+        # summary alone, so a page claiming two sources contained only one of
+        # them (#21) — on every re-ingest, not just a failed one.
+        page_body = upsert_section(
+            existing.body if existing else "",
+            identifier=source.identifier,
+            date=date,
+            text=body,
+        )
+
+        if extracted is not None:
+            # Records written before attribution existed belong to whichever
+            # source the page cited first.
+            first_source = sources[0] if sources else None
+            entities = merge_records(
+                list(existing.frontmatter.get("entities", [])) if existing else [],
+                [{"text": e.text, "entity_type": e.entity_type} for e in extracted.entities],
+                source=source.identifier,
+                first_source=first_source,
+                extraction_failed=extracted.relations_failed,
+            )
+            facts = merge_records(
+                list(existing.frontmatter.get("facts", [])) if existing else [],
+                [
+                    {
+                        "head": f.head,
+                        "relation": f.relation,
+                        "tail": f.tail,
+                        "head_type": f.head_type,
+                        "tail_type": f.tail_type,
+                    }
+                    for f in extracted.facts
+                ],
+                source=source.identifier,
+                first_source=first_source,
+                extraction_failed=extracted.relations_failed,
+            )
+            if entities:
+                frontmatter["entities"] = entities
+            if facts:
+                frontmatter["facts"] = facts
+
+        page = Page(slug=slug, frontmatter=frontmatter, body=page_body)
         schema.enforce_page(page)
         txn.put_page(page)
 
