@@ -13,7 +13,15 @@ Configuration is env-driven so the seat wrapper controls it:
   requires one (default ``hermes``).
 - ``WIKI_LLM_TIMEOUT``  — per-request timeout in seconds (default 30); bounds how
   long a stuck proxy can stall a request before the fake fallback kicks in.
+- ``WIKI_LLM_MAX_RETRIES`` — retries per request (default 0). See below.
 - ``WIKI_LLM_DISABLED`` — set truthy to force the deterministic fakes.
+
+Retries differ by caller, deliberately. The MCP server runs a single-threaded
+loop with an agent waiting on it, so it defaults to **0**: a retry storm there
+stacks timeout latency onto every degraded call. Batch callers have no latency
+budget and nobody waiting, so `reindex_facts` asks for retries explicitly — four
+transient timeouts on one seat left twelve pages unconverted, which is precisely
+the case a retry fixes.
 
 Every model call degrades gracefully: if the proxy is unreachable or errors, the
 backend falls back to the deterministic fake behaviour and logs to stderr, so the
@@ -31,6 +39,7 @@ from .protocols import Answerer, Summarizer
 from .source import Source
 
 __all__ = [
+    "BATCH_MAX_RETRIES",
     "HermesAnswerer",
     "HermesSummarizer",
     "build_judgment",
@@ -40,6 +49,11 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:8645/v1"
 _DEFAULT_MODEL = "minimax/minimax-m3"
 _DEFAULT_API_KEY = "hermes"
 _DEFAULT_TIMEOUT = 30.0
+# Interactive default. Batch callers pass their own — see build_judgment.
+_DEFAULT_MAX_RETRIES = 0
+# What a batch CLI asks for: enough to ride out a transient proxy hiccup without
+# turning one slow page into minutes of stalling.
+BATCH_MAX_RETRIES = 2
 
 _SUMMARY_MAX_TOKENS = 600
 _ANSWER_MAX_TOKENS = 900
@@ -72,15 +86,29 @@ class OpenAICompatibleClient:
     """Thin wrapper over the ``openai`` SDK pointed at an OpenAI-compatible endpoint."""
 
     def __init__(
-        self, *, base_url: str, model: str, api_key: str, timeout: float = _DEFAULT_TIMEOUT
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout: float = _DEFAULT_TIMEOUT,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
     ) -> None:
         from openai import OpenAI  # lazy: only needed when LLM backends are actually used
 
         # A request timeout means a hung proxy raises (and the backends fall back to
-        # fakes) rather than wedging the single-threaded MCP loop. max_retries=0 avoids
-        # a retry storm stacking that latency on every degraded call.
-        self._client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
+        # fakes) rather than wedging the single-threaded MCP loop.
+        #
+        # `max_retries` defaults to 0 for that same loop: a retry storm there stacks
+        # timeout latency onto every degraded call while an agent waits. Batch callers
+        # override it. The SDK handles the backoff, and retries only what can actually
+        # succeed on a second attempt — connection errors, timeouts, 429 and 5xx. A 400
+        # is not retried, because it would fail identically.
+        self._client = OpenAI(
+            base_url=base_url, api_key=api_key, timeout=timeout, max_retries=max_retries
+        )
         self.model = model
+        self.max_retries = max_retries
 
     def complete(self, system: str, user: str, *, max_tokens: int) -> str:
         response = self._client.chat.completions.create(
@@ -143,11 +171,15 @@ def _truthy(value: str) -> bool:
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
-def build_judgment() -> tuple[Summarizer, Answerer]:
+def build_judgment(*, max_retries: int | None = None) -> tuple[Summarizer, Answerer]:
     """Return ``(summarizer, answerer)`` for the MCP server to inject.
 
     Hermes-backed (model-driven) when ``openai`` is importable and the LLM backend
     is not explicitly disabled; otherwise the deterministic fakes.
+
+    ``max_retries`` lets a batch caller opt into retries that would be wrong for
+    the interactive MCP loop; ``None`` means take ``WIKI_LLM_MAX_RETRIES``, which
+    itself defaults to 0.
     """
     if _truthy(os.environ.get("WIKI_LLM_DISABLED", "")):
         from .fakes import FakeAnswerer, FakeSummarizer
@@ -160,8 +192,13 @@ def build_judgment() -> tuple[Summarizer, Answerer]:
     api_key = os.environ.get("WIKI_LLM_API_KEY", _DEFAULT_API_KEY)
     try:
         timeout = float(os.environ.get("WIKI_LLM_TIMEOUT", _DEFAULT_TIMEOUT))
+        retries = (
+            int(os.environ.get("WIKI_LLM_MAX_RETRIES", _DEFAULT_MAX_RETRIES))
+            if max_retries is None
+            else max_retries
+        )
         client: _ChatClient = OpenAICompatibleClient(
-            base_url=base_url, model=model, api_key=api_key, timeout=timeout
+            base_url=base_url, model=model, api_key=api_key, timeout=timeout, max_retries=retries
         )
     except Exception as exc:  # noqa: BLE001 - openai missing or misconfigured
         from .fakes import FakeAnswerer, FakeSummarizer
@@ -169,5 +206,5 @@ def build_judgment() -> tuple[Summarizer, Answerer]:
         _warn(f"LLM backend unavailable ({exc}); using deterministic fakes")
         return FakeSummarizer(), FakeAnswerer()
 
-    _warn(f"using Hermes-backed model '{model}' at {base_url}")
+    _warn(f"using Hermes-backed model '{model}' at {base_url} (max_retries={retries})")
     return HermesSummarizer(client), HermesAnswerer(client)

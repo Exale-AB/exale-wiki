@@ -112,6 +112,20 @@ these before persisting.
 **structural-only retrieval, no database needed** — which is why the MCP works without
 Postgres. `WIKI_REPO_PATH` selects the repo.
 
+### Retry policy is per-caller (`llm_backends.py`)
+`OpenAICompatibleClient` defaults to **`max_retries=0`**, because the MCP server is a
+single-threaded loop with an agent waiting: a retry storm there stacks timeout latency
+onto every degraded call. Batch callers have no latency budget, so `reindex_facts` passes
+`BATCH_MAX_RETRIES` explicitly — four transient timeouts on a seat left twelve pages
+unconverted, which is exactly what a retry fixes. `WIKI_LLM_MAX_RETRIES` sets the default
+without a code change; an explicit argument wins, because the caller knows whether it is
+interactive and the environment does not.
+
+Retries go through the **Hermes proxy** like every other model call — the engine still
+never talks to an LLM vendor directly. The SDK owns the backoff and retries only what can
+succeed on a second attempt (connection errors, timeouts, 429, 5xx); a 400 is not retried
+because it would fail identically.
+
 ### Bilingual NER (`language.py`)
 Seats declare `languages: [sv, en]`, so `SpacyNerLlmExtractor` detects each
 document's language and loads `sv_core_news_md` or `en_core_web_md` rather than

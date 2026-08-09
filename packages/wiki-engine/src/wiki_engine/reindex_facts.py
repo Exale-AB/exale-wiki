@@ -120,9 +120,11 @@ def main() -> None:  # pragma: no cover
 
     try:
         from .extraction import SpacyNerLlmExtractor
-        from .llm_backends import build_judgment
+        from .llm_backends import BATCH_MAX_RETRIES, build_judgment
 
-        summarizer, _answerer = build_judgment()
+        # Batch context: no agent waiting, so ride out a transient proxy hiccup
+        # rather than leaving the page unconverted.
+        summarizer, _answerer = build_judgment(max_retries=BATCH_MAX_RETRIES)
         client = getattr(summarizer, "_client", None)
         extractor: FactExtractor = SpacyNerLlmExtractor(llm_client=client)
     except ImportError:
