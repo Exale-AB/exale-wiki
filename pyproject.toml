@@ -68,7 +68,9 @@ venv = ".venv"
 
 # --- Tests -------------------------------------------------------------------
 [tool.pytest.ini_options]
-testpaths = ["packages"]
+# `tests/` holds the repo-level docs harness; package tests live beside their
+# package under packages/*/tests/.
+testpaths = ["packages", "tests"]
 addopts = "--cov --cov-report=term-missing --cov-report=xml --cov-config=pyproject.toml"
 markers = [
     "unit: pure-Python unit tests with no external dependencies",

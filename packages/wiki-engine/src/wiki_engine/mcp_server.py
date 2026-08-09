@@ -419,9 +419,7 @@ def _update_graph_for_page(graph: Any, repo: Any, slug: str) -> None:
     facts_raw = page.frontmatter.get("facts", [])
     if not entities_raw and not facts_raw:
         return
-    entities = tuple(
-        Entity(text=e["text"], entity_type=e["entity_type"]) for e in entities_raw
-    )
+    entities = tuple(Entity(text=e["text"], entity_type=e["entity_type"]) for e in entities_raw)
     facts = tuple(
         Fact(
             head=f["head"],

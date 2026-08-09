@@ -41,7 +41,9 @@ def main() -> None:
         llm_model = os.environ.get("WIKI_LLM_MODEL", "minimax/minimax-m3")
         llm_key = os.environ.get("WIKI_LLM_API_KEY", "hermes")
         client = OpenAICompatibleClient(
-            base_url=llm_base, model=llm_model, api_key=llm_key,
+            base_url=llm_base,
+            model=llm_model,
+            api_key=llm_key,
         )
         extractor = SpacyNerLlmExtractor(llm_client=client)
     except Exception:

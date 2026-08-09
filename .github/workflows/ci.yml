@@ -1,0 +1,47 @@
+name: ci
+
+# Nothing ran the test suite before this. The coverage gate and the docs harness
+# in tests/test_docs_harness.py only earn their keep if they run on every change
+# — that is what stops README.md and CLAUDE.md drifting from the code they
+# describe, and those two files are how the three sibling repos learn to use
+# this engine.
+#
+# The steps below are exactly the commands README.md tells a human to run;
+# test_ci_runs_the_commands_the_docs_promise fails if they drift apart.
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync
+
+      # test_extraction.py's spaCy NER tests gate on spacy being importable, not
+      # on the model being present — so without this they fail rather than skip.
+      # The model is not a declared dependency (it installs from a GitHub URL),
+      # which is why it has to be fetched as its own step.
+      - name: Install the spaCy model the extraction tests need
+        run: uv run python -m spacy download en_core_web_sm
+
+      - name: Tests (docs harness + coverage gate)
+        run: uv run pytest
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run pyright

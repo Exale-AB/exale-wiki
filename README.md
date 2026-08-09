@@ -114,6 +114,11 @@ uv run pyright               # type-check
 Dev-tool pins are exact (`ruff==0.15.17`, `pyright==1.1.410`) so output is stable
 across machines.
 
+`uv run pytest` also runs the docs harness (`tests/test_docs_harness.py`), which
+fails when this file or `CLAUDE.md` drifts from the code and tool config it
+describes. `.github/workflows/ci.yml` runs the same four commands on every push,
+plus a gitleaks secret scan.
+
 ## MCP server
 
 `python -m wiki_engine` runs a stdin/stdout JSON-RPC loop exposing 8 tools:

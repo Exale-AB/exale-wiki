@@ -118,6 +118,27 @@ The running setup treats the local machine as a VPS — no Docker in the path:
 A parallel `exale-seat-local-*` Docker stack (pgvector on `:5433`, model-mock `:8088`,
 hermes `:8642`) may still be running but is **not** used by the native path.
 
+## The docs harness
+
+`tests/test_docs_harness.py` checks this file and `README.md` against the code:
+referenced paths and `wiki_engine.*` modules exist, the README covers every
+workspace member, advertised extras are real, and the coverage gate, dev-tool
+pins and Python pin quoted in prose match `pyproject.toml`. It also enforces two
+claims made above rather than leaving them as prose — no Hermes import, and the
+optional extras (`openai`, `fastembed`, `spacy`) imported lazily so
+`import wiki_engine` works without them.
+
+It exists because three sibling repos use this engine by reading these two files
+rather than the source. **If you move a module or change a tool setting, update
+the docs in the same commit** — the harness will fail otherwise, which is the
+point.
+
+Design notes under `docs/` are checked more loosely: they legitimately cite files
+in other repos and in the papers they port from, so only paths anchored at a real
+top-level directory of this repo are verified. A doc describing an abandoned
+design is legitimate history — put `HISTORICAL RECORD` in its first lines,
+pointing at what replaced it, and the currency checks skip it.
+
 ## Gotchas
 
 - **Dev-tool pins are exact** (`ruff==0.15.17`, `pyright==1.1.410`) so output is stable
