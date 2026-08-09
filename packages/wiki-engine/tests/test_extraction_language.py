@@ -189,3 +189,77 @@ def test_real_models_produce_the_same_canonical_type_for_the_same_person() -> No
         return {e.entity_type for e in result.entities if name in e.text}
 
     assert types_for(sv, "Peter") == types_for(en, "Peter") == {"PERSON"}
+
+
+# --- fact endpoint types -----------------------------------------------------
+
+
+class _StubClient:
+    """Returns canned relation JSON, so the parse path can be driven directly."""
+
+    def __init__(self, payload: list[dict[str, str]]) -> None:
+        self._payload = payload
+
+    def complete(self, system: str, user: str, *, max_tokens: int) -> str:
+        import json
+
+        return json.dumps(self._payload)
+
+
+def _facts_from(payload: list[dict[str, str]]) -> tuple[Any, ...]:
+    loader = _Loader([_Ent("Anna", "PRS"), _Ent("Volvo", "ORG")])
+    extractor = SpacyNerLlmExtractor(llm_client=_StubClient(payload), model_loader=loader)
+    return extractor.extract(SWEDISH).facts
+
+
+def _relation(head_type: str, tail_type: str) -> dict[str, str]:
+    return {
+        "head": "Anna",
+        "relation": "works_for",
+        "tail": "Volvo",
+        "head_type": head_type,
+        "tail_type": tail_type,
+    }
+
+
+def test_fact_endpoint_types_are_canonicalised() -> None:
+    """The defect in #11: these came back from the LLM unmapped."""
+    facts = _facts_from([_relation("PERSON", "GPE")])
+    assert (facts[0].head_type, facts[0].tail_type) == ("PERSON", "LOC")
+
+
+def test_invented_endpoint_types_collapse_to_misc() -> None:
+    """TRANSACTION and DOCUMENT were observed on a production seat."""
+    facts = _facts_from([_relation("PERSON", "TRANSACTION")])
+    assert facts[0].tail_type == "MISC"
+    assert facts[0].relation == "works_for", "the relation itself must survive"
+
+
+def test_a_quantity_endpoint_drops_the_fact() -> None:
+    """Entity extraction excludes quantities; a relation must not smuggle one in."""
+    assert _facts_from([_relation("PERSON", "MONEY")]) == ()
+
+
+def test_the_prompt_offers_the_canonical_vocabulary() -> None:
+    """Cheaper to steer the model than to repair its output."""
+    from wiki_engine.extraction import _RELATION_EXTRACTION_SYSTEM
+
+    for expected in ("PERSON", "ORG", "LOC", "MISC"):
+        assert expected in _RELATION_EXTRACTION_SYSTEM
+    assert "QUANTITY" not in _RELATION_EXTRACTION_SYSTEM, "an excluded type must not be offered"
+
+
+def test_every_endpoint_type_stays_inside_the_vocabulary() -> None:
+    from wiki_engine.language import CANONICAL_ENTITY_TYPES
+
+    payload = [
+        _relation("PERSON", "GPE"),
+        _relation("ORG", "NORP"),
+        _relation("PRS", "DOCUMENT"),
+        _relation("WORK_OF_ART", "TRANSACTION"),
+    ]
+    facts = _facts_from(payload)
+    assert len(facts) == 4
+    for fact in facts:
+        assert fact.head_type in CANONICAL_ENTITY_TYPES
+        assert fact.tail_type in CANONICAL_ENTITY_TYPES
