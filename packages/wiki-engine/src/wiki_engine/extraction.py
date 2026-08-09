@@ -181,13 +181,22 @@ class SpacyNerLlmExtractor:
 
         return tuple(entities[: self._max_entities])
 
-    def _extract_relations(self, text: str, entities: tuple[Entity, ...]) -> tuple[Fact, ...]:
+    def _extract_relations(
+        self, text: str, entities: tuple[Entity, ...]
+    ) -> tuple[tuple[Fact, ...], bool]:
         """Extract relations between entities via LLM.
 
         Ported from MemGraphRAG schema_fact_extract.py::extract_relations_from_chunk.
+
+        Returns the facts and whether extraction *failed*. Those were the same
+        empty tuple before, so a timed-out page and a page with no relations were
+        indistinguishable downstream — see ExtractedFacts.relations_failed.
+
+        No client, or too few entities to relate, is not a failure: there is
+        genuinely nothing to extract.
         """
         if self._client is None or len(entities) < 2:
-            return ()
+            return (), False
 
         user_prompt = _RELATION_EXTRACTION_USER.format(
             text=text,
@@ -195,10 +204,10 @@ class SpacyNerLlmExtractor:
         )
         try:
             raw = self._client.complete(_RELATION_EXTRACTION_SYSTEM, user_prompt, max_tokens=800)
-            return self._parse_relations(raw)
+            return self._parse_relations(raw), False
         except Exception as exc:
             _warn(f"relation extraction failed ({exc}); returning entities only")
-            return ()
+            return (), True
 
     @staticmethod
     def _parse_relations(raw: str) -> tuple[Fact, ...]:
@@ -246,5 +255,5 @@ class SpacyNerLlmExtractor:
 
     def extract(self, text: str) -> ExtractedFacts:
         entities = self._extract_entities(text)
-        facts = self._extract_relations(text, entities)
-        return ExtractedFacts(entities=entities, facts=facts)
+        facts, failed = self._extract_relations(text, entities)
+        return ExtractedFacts(entities=entities, facts=facts, relations_failed=failed)
