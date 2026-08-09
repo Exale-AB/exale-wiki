@@ -27,7 +27,10 @@ __all__ = [
     "EXCLUDED_ENTITY_TYPES",
     "SPACY_MODELS",
     "SWEDISH_STOPWORDS",
+    "CANONICAL_ENTITY_TYPES",
+    "MISC_ENTITY_TYPE",
     "canonical_entity_type",
+    "canonical_fact_type",
     "detect_language",
     "language_for_model",
 ]
@@ -279,6 +282,12 @@ _CANONICAL: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "WORK_OF_ART": "WORK",
                 "DATE": "DATE",
                 "TIME": "TIME",
+                # Identity entries rather than pass-through. They are real spaCy
+                # labels, and listing them is what lets "not in the map" mean
+                # "the LLM invented this" instead of "we never got round to it".
+                "NORP": "NORP",
+                "LAW": "LAW",
+                "LANGUAGE": "LANGUAGE",
                 # Numeric and measurement labels are dropped downstream.
                 "CARDINAL": "QUANTITY",
                 "ORDINAL": "QUANTITY",
@@ -308,10 +317,48 @@ _CANONICAL: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
 EXCLUDED_ENTITY_TYPES: Final[frozenset[str]] = frozenset({"QUANTITY"})
 
 
+MISC_ENTITY_TYPE: Final = "MISC"
+
+# The closed vocabulary. Fact endpoint types are held to it; NER labels are not,
+# because those come from a model whose label set we know.
+CANONICAL_ENTITY_TYPES: Final[frozenset[str]] = frozenset(
+    {value for mapping in _CANONICAL.values() for value in mapping.values()} | {MISC_ENTITY_TYPE}
+)
+
+# Every language's labels in one table, for fact endpoints. An LLM's label
+# vocabulary is not bound to the document's language — production seats show
+# `GPE` on Swedish pages — so looking a fact type up in only the detected
+# language's map would send a perfectly mappable label to MISC. Safe to merge:
+# the two maps overlap on `ORG` and `LOC` only, and agree on both.
+_CANONICAL_ANY_LANGUAGE: Final[Mapping[str, str]] = MappingProxyType(
+    {label: value for mapping in _CANONICAL.values() for label, value in mapping.items()}
+)
+
+
 def canonical_entity_type(label: str, language: str) -> str:
     """Map a model-specific NER label onto the shared vocabulary.
 
-    Unknown labels pass through unchanged: a future model revision should lose
-    precision, not entities.
+    Unknown labels pass through unchanged: these come from spaCy, whose label
+    set is known and listed above, so an unknown one means a future model
+    revision — which should lose precision, not entities.
     """
     return _CANONICAL.get(language, {}).get(label, label)
+
+
+def canonical_fact_type(label: str) -> str:
+    """Map an LLM-supplied fact endpoint type onto the shared vocabulary.
+
+    Stricter than `canonical_entity_type`, because the source is different. The
+    relation prompt asks the model to echo the entity types it was given, and it
+    does not always comply — production seats show `GPE` (never echoed: entities
+    are normalised to `LOC` before the prompt is built) alongside invented types
+    like `TRANSACTION` and `DOCUMENT`. Left alone, the graph's type vocabulary
+    grows without bound and cross-language linking fails on the relation edges,
+    which is the whole point of normalising.
+
+    Takes no language: see `_CANONICAL_ANY_LANGUAGE`. Anything still outside the
+    vocabulary collapses to `MISC` — the relation is worth keeping even when the
+    model's idea of its endpoint type is not.
+    """
+    canonical = _CANONICAL_ANY_LANGUAGE.get(label, label)
+    return canonical if canonical in CANONICAL_ENTITY_TYPES else MISC_ENTITY_TYPE

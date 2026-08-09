@@ -3,12 +3,14 @@
 import pytest
 
 from wiki_engine.language import (
+    CANONICAL_ENTITY_TYPES,
     DEFAULT_LANGUAGE,
     ENGLISH_STOPWORDS,
     EXCLUDED_ENTITY_TYPES,
     SPACY_MODELS,
     SWEDISH_STOPWORDS,
     canonical_entity_type,
+    canonical_fact_type,
     detect_language,
 )
 
@@ -161,3 +163,60 @@ def test_numeric_types_are_excluded_in_both_languages() -> None:
 def test_meaningful_types_are_not_excluded() -> None:
     for label, lang in [("PRS", "sv"), ("PERSON", "en"), ("ORG", "en"), ("DATE", "en")]:
         assert canonical_entity_type(label, lang) not in EXCLUDED_ENTITY_TYPES
+
+
+# --- fact endpoint types (LLM-supplied, held to a closed vocabulary) ----------
+
+
+@pytest.mark.parametrize("label", sorted(CANONICAL_ENTITY_TYPES))
+def test_canonical_types_are_stable_under_fact_mapping(label: str) -> None:
+    """Mapping an already-canonical type must be a no-op, or it is not closed."""
+    assert canonical_fact_type(label) == label
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("GPE", "LOC"),
+        ("WORK_OF_ART", "WORK"),
+        ("FAC", "FACILITY"),
+        ("PRS", "PERSON"),
+        ("OBJ", "PRODUCT"),
+        ("EVN", "EVENT"),
+    ],
+)
+def test_fact_types_are_remapped_regardless_of_document_language(label: str, expected: str) -> None:
+    """The LLM's label vocabulary is not bound to the document's language.
+
+    Production seats emit `GPE` on Swedish pages, so a per-language lookup would
+    send a perfectly mappable label to MISC.
+    """
+    assert canonical_fact_type(label) == expected
+
+
+@pytest.mark.parametrize("label", ["TRANSACTION", "DOCUMENT", "INVOICE", "", "person"])
+def test_invented_fact_types_collapse_to_misc(label: str) -> None:
+    """Observed on a seat: the model invents types, so the vocabulary grew."""
+    assert canonical_fact_type(label) == "MISC"
+
+
+def test_fact_mapping_keeps_the_vocabulary_closed() -> None:
+    """The property the whole change exists for."""
+    seen_on_a_seat = [
+        "ORG", "PERSON", "DATE", "PRODUCT", "TIME", "LOC",
+        "GPE", "NORP", "DOCUMENT", "LANGUAGE", "TRANSACTION", "PERCENT",
+    ]  # fmt: skip
+    assert {canonical_fact_type(label) for label in seen_on_a_seat} <= CANONICAL_ENTITY_TYPES
+
+
+def test_quantity_survives_fact_mapping_so_it_can_be_dropped() -> None:
+    """It must map to the excluded type, not to MISC, or the drop never fires."""
+    for label in ("PERCENT", "MONEY", "MSR", "CARDINAL"):
+        assert canonical_fact_type(label) in EXCLUDED_ENTITY_TYPES
+
+
+def test_known_spacy_labels_are_explicit_not_passed_through() -> None:
+    """`not in the map` must mean `invented`, which pass-through would blur."""
+    for label in ("NORP", "LAW", "LANGUAGE"):
+        assert canonical_entity_type(label, "en") == label
+        assert canonical_fact_type(label) == label
