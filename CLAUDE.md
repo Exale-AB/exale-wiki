@@ -161,6 +161,15 @@ pointing at what replaced it, and the currency checks skip it.
 
 ## Gotchas
 
+- **`reindex_facts --force` clears, and that is deliberate.** Force means
+  re-extract from scratch, so a page whose extraction returns nothing loses its
+  records. A page whose extraction *fails* is left untouched instead and counted
+  in `ReindexFactsResult.failed` — a timeout must not delete real facts. The two
+  used to be the same empty tuple, which is how twelve pages on a seat survived a
+  full `--force` run with stale records and fresh mtimes.
+- **`ExtractedFacts.relations_failed`** carries that distinction. It defaults to
+  `False`, so external `FactExtractor` implementations need no change.
+
 - **Dev-tool pins are exact** (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
   across machines; bump them deliberately. The full gate is green: `uv run pytest`,
   `ruff check`, `ruff format --check`, and `pyright` (0 errors — only a benign
