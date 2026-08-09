@@ -10,10 +10,16 @@
 never reaches this engine. Swedish content is run through an English NER model,
 which finds few entities and mislabels the ones it does find.
 
-There is a second, quieter defect. `_EXCLUDED_LABELS` holds raw English labels
+There is a second, structural defect. `_EXCLUDED_LABELS` holds raw English labels
 (`CARDINAL`, `ORDINAL`, `MONEY`, `PERCENT`, `QUANTITY`). A Swedish model never
-emits those, so on Swedish text the filter matches nothing and measures and
-amounts leak into the knowledge graph as entities.
+emits those, so on Swedish text the filter can never match and `MSR` passes
+straight through.
+
+Measured impact today is small: `sv_core_news_sm` rarely fires `MSR` at all —
+across four amount-heavy Swedish sentences it emitted none. This is a filter
+that is wrong in principle rather than one leaking heavily in practice; it
+starts to matter on `sv_core_news_md`/`lg`, or any model that tags measurements
+more readily.
 
 ## Scope
 
@@ -83,8 +89,9 @@ languages.
 | — | `NORP`, `LAW`, `LANGUAGE` | unchanged |
 | `MSR` | `CARDINAL`, `ORDINAL`, `MONEY`, `PERCENT`, `QUANTITY` | dropped |
 
-`_EXCLUDED_LABELS` moves from raw English labels to canonical types, which fixes
-the leak described under Problem.
+`_EXCLUDED_LABELS` moves from raw English labels to canonical types, so the
+filter applies to both languages — see the caveat under Problem about how much
+that actually catches today.
 
 **Accepted trade-off:** `GPE→LOC` discards the distinction between a
 geopolitical entity and a plain place. Swedish has no `GPE`, so keeping it would

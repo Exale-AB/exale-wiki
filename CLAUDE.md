@@ -104,6 +104,18 @@ these before persisting.
 **structural-only retrieval, no database needed** — which is why the MCP works without
 Postgres. `WIKI_REPO_PATH` selects the repo.
 
+### Bilingual NER (`language.py`)
+Seats declare `languages: [sv, en]`, so `SpacyNerLlmExtractor` detects each
+document's language and loads `sv_core_news_sm` or `en_core_web_sm` rather than
+always English. Detection is a deliberate zero-dependency heuristic (diacritics
++ disjoint stopword sets) — the sv/en decision is binary, and the engine core
+stays installable with no extras. Both models' labels are normalised to one
+canonical vocabulary so the graph holds one type per real-world concept;
+`canonical_entity_type` owns that map. **A missing model degrades to the default
+language with one warning** — no seat has `sv_core_news_sm` yet, so without that
+fallback every Swedish ingest would fail. Detection is weakest on very short
+text, which includes query-time extraction in `retrieval.py`.
+
 ## Local deployment (native, no Docker)
 
 The running setup treats the local machine as a VPS — no Docker in the path:

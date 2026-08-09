@@ -53,9 +53,19 @@ The engine owns **deterministic bookkeeping**; **judgment** steps are injected a
 | `Summarizer` | ingest | Hermes LLM proxy |
 | `Embedder` | vector index | fastembed / Hermes |
 | `Answerer` | query | Hermes LLM proxy |
-| `FactExtractor` | ingest (NER + relations) | spaCy + Hermes LLM |
+| `FactExtractor` | ingest (NER + relations) | spaCy (sv/en, auto-detected) + Hermes LLM |
 
 Tests inject deterministic fakes (`fakes.py`). The engine never calls an LLM API directly.
+
+### Bilingual extraction (Swedish + English)
+
+Seats are bilingual, so `language.py` detects the language of each document —
+a zero-dependency `sv`/`en` heuristic — and `SpacyNerLlmExtractor` loads the
+matching model (`sv_core_news_sm` or `en_core_web_sm`). Both models' NER labels
+are normalised onto one canonical vocabulary (`PRS` and `PERSON` both become
+`PERSON`), so a Swedish page and an English one about the same person meet as
+one entity type in the graph. A model that is not installed degrades to the
+default language with a warning rather than failing ingest.
 
 ### Three-layer memory (MemGraphRAG-inspired)
 

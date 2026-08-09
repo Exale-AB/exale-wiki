@@ -112,7 +112,6 @@ class _StubChatClient:
         return self._response
 
 
-@pytest.mark.skipif(not HAS_SPACY, reason="spaCy not installed")
 def test_relation_extraction_with_stub_llm():
     from wiki_engine.extraction import SpacyNerLlmExtractor
 
@@ -127,11 +126,9 @@ def test_relation_extraction_with_stub_llm():
             }
         ]
     )
-    extractor = SpacyNerLlmExtractor.__new__(SpacyNerLlmExtractor)
-    extractor._client = _StubChatClient(canned)
-    extractor._max_entities = 50
-    extractor._nlp = None
-    extractor._spacy_model = "en_core_web_sm"
+    # Relation extraction never touches spaCy, so build the extractor normally
+    # rather than hand-assembling private attributes through __new__.
+    extractor = SpacyNerLlmExtractor(llm_client=_StubChatClient(canned))
 
     entities = (Entity("Acme Corp", "ORG"), Entity("WidgetCo", "ORG"))
     facts = extractor._extract_relations("Acme Corp acquired WidgetCo.", entities)

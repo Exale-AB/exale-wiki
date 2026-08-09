@@ -8,17 +8,23 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .language import (
+    DEFAULT_LANGUAGE,
+    EXCLUDED_ENTITY_TYPES,
+    SPACY_MODELS,
+    canonical_entity_type,
+    detect_language,
+    language_for_model,
+)
 from .protocols import Entity, ExtractedFacts, Fact
 
 if TYPE_CHECKING:
     from .llm_backends import _ChatClient
 
 __all__ = ["SpacyNerLlmExtractor"]
-
-# Ported from MemGraphRAG schema_fact_extract.py — entity types to exclude
-_EXCLUDED_LABELS = frozenset({"CARDINAL", "ORDINAL", "MONEY", "PERCENT", "QUANTITY"})
 
 # Ported verbatim from MemGraphRAG prompt.py
 _RELATION_EXTRACTION_SYSTEM = """\
@@ -61,50 +67,97 @@ def _format_entities_for_prompt(entities: tuple[Entity, ...]) -> str:
     return "\n".join(f"- {e.text} ({e.entity_type})" for e in entities)
 
 
+def _default_loader(model: str) -> Any:
+    import spacy  # lazy: wiki-engine[extraction] is an optional extra
+
+    return spacy.load(model)
+
+
 class SpacyNerLlmExtractor:
     """Hybrid extractor: spaCy NER for entities, LLM for relations.
 
-    Ported from MemGraphRAG entity_type_extract.py + schema_fact_extract.py.
-    Degradation: if llm_client is None, returns entities only (no relations).
+    Ported from MemGraphRAG entity_type_extract.py + schema_fact_extract.py, with
+    the model chosen per document from the text's language rather than fixed to
+    English.
+
+    Degradation: if llm_client is None, returns entities only (no relations); if
+    the detected language's model is not installed, falls back to the default
+    language's model with one warning.
     """
 
     def __init__(
         self,
         llm_client: _ChatClient | None = None,
-        spacy_model: str = "en_core_web_sm",
+        spacy_model: str | None = None,
         max_entities: int = 50,
+        default_language: str = DEFAULT_LANGUAGE,
+        model_loader: Callable[[str], Any] | None = None,
     ) -> None:
         self._client = llm_client
         self._max_entities = max_entities
-        self._nlp: Any = None
+        # Passing spacy_model pins one model and skips detection entirely.
         self._spacy_model = spacy_model
+        self._default_language = default_language
+        self._load_model = model_loader or _default_loader
+        self._nlp_by_model: dict[str, Any] = {}
+        self._warned_models: set[str] = set()
 
-    def _load_spacy(self) -> Any:
-        if self._nlp is None:
-            import spacy
+    def _model_for(self, text: str) -> str:
+        if self._spacy_model is not None:
+            return self._spacy_model
+        language = detect_language(text, default=self._default_language)
+        return SPACY_MODELS.get(language, SPACY_MODELS[self._default_language])
 
-            self._nlp = spacy.load(self._spacy_model)
-        return self._nlp
+    def _load_spacy(self, model: str) -> tuple[Any, str]:
+        """Load and cache ``model``; return it with the model actually used.
+
+        No seat has sv_core_news_sm installed yet, so a missing model has to
+        degrade rather than break ingest on every Swedish document. The caller
+        needs the model that was *actually* loaded, not the one asked for —
+        after a fallback the labels are the fallback's, and normalising them as
+        Swedish would corrupt every entity type. A failure to load the fallback
+        itself is a real misconfiguration and propagates.
+        """
+        if model in self._nlp_by_model:
+            return self._nlp_by_model[model]
+
+        fallback = SPACY_MODELS[self._default_language]
+        try:
+            resolved = (self._load_model(model), model)
+        except OSError:
+            if model == fallback:
+                raise
+            if model not in self._warned_models:
+                self._warned_models.add(model)
+                _warn(f"spaCy model {model!r} is not installed; falling back to {fallback!r}")
+            resolved = self._load_spacy(fallback)
+
+        self._nlp_by_model[model] = resolved
+        return resolved
 
     def _extract_entities(self, text: str) -> tuple[Entity, ...]:
         """Extract and filter entities using spaCy NER.
 
         Ported from MemGraphRAG entity_type_extract.py::extract_entities_from_chunk
-        + schema_fact_extract.py::filter_entities (excluded labels + dedup).
+        + schema_fact_extract.py::filter_entities (excluded labels + dedup), with
+        labels normalised to the canonical vocabulary first so the two models'
+        output is comparable in the knowledge graph.
         """
-        nlp = self._load_spacy()
+        nlp, used_model = self._load_spacy(self._model_for(text))
+        language = language_for_model(used_model, default=self._default_language)
         doc = nlp(text)
 
         seen: set[tuple[str, str]] = set()
         entities: list[Entity] = []
         for ent in doc.ents:
-            if ent.label_ in _EXCLUDED_LABELS:
+            entity_type = canonical_entity_type(ent.label_, language)
+            if entity_type in EXCLUDED_ENTITY_TYPES:
                 continue
-            key = (ent.text, ent.label_)
+            key = (ent.text, entity_type)
             if key in seen:
                 continue
             seen.add(key)
-            entities.append(Entity(text=ent.text, entity_type=ent.label_))
+            entities.append(Entity(text=ent.text, entity_type=entity_type))
 
         return tuple(entities[: self._max_entities])
 
