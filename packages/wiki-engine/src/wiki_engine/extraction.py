@@ -12,10 +12,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .language import (
+    CANONICAL_ENTITY_TYPES,
     DEFAULT_LANGUAGE,
     EXCLUDED_ENTITY_TYPES,
     SPACY_MODELS,
     canonical_entity_type,
+    canonical_fact_type,
     detect_language,
     language_for_model,
 )
@@ -26,8 +28,8 @@ if TYPE_CHECKING:
 
 __all__ = ["SpacyNerLlmExtractor"]
 
-# Ported verbatim from MemGraphRAG prompt.py
-_RELATION_EXTRACTION_SYSTEM = """\
+# Ported from MemGraphRAG prompt.py, with the type vocabulary pinned below.
+_RELATION_EXTRACTION_SYSTEM_TEMPLATE = """\
 You are an expert in knowledge graph construction and relation extraction.
 Your task is to extract relations between given entities from the provided text.
 
@@ -43,10 +45,20 @@ Return a JSON array of relation triples. Each triple should have:
 - "head": the subject entity (exactly as provided)
 - "relation": the relation type
 - "tail": the object entity (exactly as provided)
-- "head_type": the entity type/label of the head entity (exactly as provided)
-- "tail_type": the entity type/label of the tail entity (exactly as provided)
+- "head_type": the type of the head entity, copied from the entity list above
+- "tail_type": the type of the tail entity, copied from the entity list above
+
+Use ONLY these types, exactly as written: {allowed_types}
+Do not invent new type names. If none fits, use MISC.
 
 If no valid relations can be extracted, return an empty array: []"""
+
+# Offering the model the vocabulary is cheaper than repairing its output, but it
+# is a hint, not a guarantee — `canonical_fact_type` still holds the line.
+# EXCLUDED types are left out: a fact with one as an endpoint is dropped anyway.
+_RELATION_EXTRACTION_SYSTEM = _RELATION_EXTRACTION_SYSTEM_TEMPLATE.format(
+    allowed_types=", ".join(sorted(CANONICAL_ENTITY_TYPES - EXCLUDED_ENTITY_TYPES))
+)
 
 _RELATION_EXTRACTION_USER = """\
 ## Text:
@@ -215,13 +227,19 @@ class SpacyNerLlmExtractor:
                 continue
             if not all(item.get(k) for k in required):
                 continue
+            head_type = canonical_fact_type(item["head_type"])
+            tail_type = canonical_fact_type(item["tail_type"])
+            # An endpoint the entity pass would have thrown away should not
+            # sneak into the graph as a vertex through the relation instead.
+            if head_type in EXCLUDED_ENTITY_TYPES or tail_type in EXCLUDED_ENTITY_TYPES:
+                continue
             facts.append(
                 Fact(
                     head=item["head"],
                     relation=item["relation"],
                     tail=item["tail"],
-                    head_type=item["head_type"],
-                    tail_type=item["tail_type"],
+                    head_type=head_type,
+                    tail_type=tail_type,
                 )
             )
         return tuple(facts)
