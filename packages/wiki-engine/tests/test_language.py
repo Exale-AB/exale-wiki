@@ -69,7 +69,7 @@ def test_stopword_sets_are_disjoint() -> None:
 
 
 def test_every_supported_language_has_a_model() -> None:
-    assert SPACY_MODELS == {"en": "en_core_web_sm", "sv": "sv_core_news_sm"}
+    assert SPACY_MODELS == {"en": "en_core_web_md", "sv": "sv_core_news_md"}
     assert DEFAULT_LANGUAGE in SPACY_MODELS
 
 

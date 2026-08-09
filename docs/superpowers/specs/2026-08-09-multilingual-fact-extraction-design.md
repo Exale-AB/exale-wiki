@@ -1,6 +1,6 @@
 # Language-aware fact extraction (Swedish + English)
 
-**Status:** approved, not yet implemented
+**Status:** implemented
 **Date:** 2026-08-09
 
 ## Problem
@@ -15,11 +15,11 @@ There is a second, structural defect. `_EXCLUDED_LABELS` holds raw English label
 emits those, so on Swedish text the filter can never match and `MSR` passes
 straight through.
 
-Measured impact today is small: `sv_core_news_sm` rarely fires `MSR` at all —
-across four amount-heavy Swedish sentences it emitted none. This is a filter
-that is wrong in principle rather than one leaking heavily in practice; it
-starts to matter on `sv_core_news_md`/`lg`, or any model that tags measurements
-more readily.
+Impact depends on the model tier. `sv_core_news_sm` emitted no `MSR` at all
+across four amount-heavy Swedish sentences, so on `sm` the filter is wrong in
+principle rather than leaking in practice. On `sv_core_news_md` — the tier this
+design selects — it does fire (`MSR`, "12 miljoner kronor"), so the fix is load
+bearing.
 
 ## Scope
 
@@ -43,7 +43,7 @@ A new module in `wiki-engine`, with no new dependency.
 
 ```python
 detect_language(text: str, default: str = "en") -> str   # "sv" | "en"
-SPACY_MODELS = {"en": "en_core_web_sm", "sv": "sv_core_news_sm"}
+SPACY_MODELS = {"en": "en_core_web_md", "sv": "sv_core_news_md"}
 ```
 
 Detection scores Swedish diacritics (`åäö`, weighted) against small Swedish and
@@ -66,9 +66,12 @@ The two models emit different vocabularies. Verified by loading them, not
 assumed:
 
 ```
-en_core_web_sm : CARDINAL DATE EVENT FAC GPE LANGUAGE LAW LOC MONEY
+en_core_web_md : CARDINAL DATE EVENT FAC GPE LANGUAGE LAW LOC MONEY
                  NORP ORDINAL ORG PERCENT PERSON PRODUCT QUANTITY TIME WORK_OF_ART
-sv_core_news_sm: EVN LOC MSR OBJ ORG PRS TME WRK
+sv_core_news_md: EVN LOC MSR OBJ ORG PRS TME WRK
+
+(The label sets are identical across the sm and md tiers, so the mapping is
+unaffected by the tier choice.)
 ```
 
 Both are mapped to one canonical vocabulary at extraction time, so the graph
@@ -110,10 +113,38 @@ worth more here than the finer English distinction.
 
 ### 4. Degradation
 
-**No seat has `sv_core_news_sm` installed today.** A missing model must `_warn`
-once and fall back to the default model rather than raise — matching how
-`llm_backends` and `reindex_facts` already degrade. Without this, the feature
-breaks ingest on every Swedish document the moment it ships.
+**Seats carry only `en_core_web_sm` today — neither md model is present.** A
+missing model must `_warn` once and fall back to the default language's model
+rather than raise, matching how `llm_backends` and `reindex_facts` already
+degrade.
+
+A missing *default* model is different: there is nothing left to degrade to, so
+it raises, with a message naming the `spacy download` command that fixes it.
+Silently extracting nothing would be worse than stopping. This makes the
+playbook change under "Out of scope" a **prerequisite**, not a follow-up.
+
+### 4a. Model tier
+
+`md` on both sides, measured over 12 hand-annotated seat-like sentences:
+
+| Content | Model | F1 |
+|---|---|---|
+| Swedish | `sv_core_news_sm` | 0.75 |
+| Swedish | `sv_core_news_md` | **0.95** |
+| English | `en_core_web_sm` | 0.75 |
+| English | `en_core_web_md` | **0.80** |
+| Swedish through the English model (today's behaviour) | `en_core_web_sm` | 0.67 |
+| Swedish through the English model | `en_core_web_md` | **0.51** |
+
+Two things that last pair settles. Detection matters more than model size —
+0.67 → 0.95 — and a bigger English model is *worse* on Swedish text than a
+smaller one, because it grows more confident that every Swedish company is a
+`LOC`. Raising the tier without adding detection would have made Swedish
+extraction worse.
+
+Gold annotations are hand-written and deliberately use Swedish proper nouns,
+which is hard on the English models; treat the absolute numbers as indicative.
+Every model was scored against the identical set.
 
 ### 5. Testing
 
@@ -121,8 +152,8 @@ breaks ingest on every Swedish document the moment it ships.
 |---|---|
 | `detect_language` | pure-function cases: sv, en, short, diacritic-free, empty |
 | label mapping | table test over both models' full label sets |
-| model selection per language | injected fake loader, so CI needs no Swedish model |
-| real end-to-end | one spaCy-gated test, skipped when the model is absent |
+| model selection per language | injected fake loader, so these need no model at all |
+| real end-to-end | one spaCy-gated test; CI downloads both md models so it runs |
 
 The suite must stay above the 80% coverage gate.
 
@@ -138,6 +169,7 @@ The suite must stay above the 80% coverage gate.
 
 ## Out of scope — other repos
 
-`deploy/ansible/wiki-mcp.yml` in exale-infra downloads only `en_core_web_sm`. It
-needs `sv_core_news_sm` alongside it, or seats will silently run the fallback
-path forever. That is an exale-infra change and is not made here.
+`deploy/ansible/wiki-mcp.yml` in exale-infra downloads only `en_core_web_sm`.
+It needs **both** `en_core_web_md` and `sv_core_news_md` (54 MB + 72 MB per
+seat), and that has to land **before** this change reaches a seat — otherwise
+the default model is absent and extraction raises. That is an exale-infra change and is not made here.

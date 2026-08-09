@@ -29,10 +29,14 @@ jobs:
 
       # test_extraction.py's spaCy NER tests gate on spacy being importable, not
       # on the model being present — so without this they fail rather than skip.
-      # The model is not a declared dependency (it installs from a GitHub URL),
-      # which is why it has to be fetched as its own step.
-      - name: Install the spaCy model the extraction tests need
-        run: uv run python -m spacy download en_core_web_sm
+      # The models are not declared dependencies (they install from GitHub URLs),
+      # which is why they have to be fetched as their own step. Both are needed:
+      # the Swedish one is what makes the cross-language test in
+      # test_extraction_language.py actually run instead of skipping.
+      - name: Install the spaCy models the extraction tests need
+        run: |
+          uv run python -m spacy download en_core_web_md
+          uv run python -m spacy download sv_core_news_md
 
       - name: Tests (docs harness + coverage gate)
         run: uv run pytest

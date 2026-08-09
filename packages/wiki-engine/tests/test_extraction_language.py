@@ -53,26 +53,26 @@ class _Loader:
 def test_swedish_text_loads_the_swedish_model() -> None:
     loader = _Loader()
     SpacyNerLlmExtractor(model_loader=loader).extract(SWEDISH)
-    assert loader.requested == ["sv_core_news_sm"]
+    assert loader.requested == ["sv_core_news_md"]
 
 
 def test_english_text_loads_the_english_model() -> None:
     loader = _Loader()
     SpacyNerLlmExtractor(model_loader=loader).extract(ENGLISH)
-    assert loader.requested == ["en_core_web_sm"]
+    assert loader.requested == ["en_core_web_md"]
 
 
 def test_an_explicit_model_skips_detection() -> None:
     """Existing callers pin a model; that must keep overriding detection."""
     loader = _Loader()
-    SpacyNerLlmExtractor(spacy_model="en_core_web_sm", model_loader=loader).extract(SWEDISH)
-    assert loader.requested == ["en_core_web_sm"]
+    SpacyNerLlmExtractor(spacy_model="en_core_web_md", model_loader=loader).extract(SWEDISH)
+    assert loader.requested == ["en_core_web_md"]
 
 
 def test_default_language_applies_when_the_text_has_no_signal() -> None:
     loader = _Loader()
     SpacyNerLlmExtractor(default_language="sv", model_loader=loader).extract("4471")
-    assert loader.requested == ["sv_core_news_sm"]
+    assert loader.requested == ["sv_core_news_md"]
 
 
 def test_each_model_is_loaded_once_and_cached() -> None:
@@ -81,24 +81,24 @@ def test_each_model_is_loaded_once_and_cached() -> None:
     extractor.extract(SWEDISH)
     extractor.extract(SWEDISH)
     extractor.extract(ENGLISH)
-    assert loader.requested == ["sv_core_news_sm", "en_core_web_sm"]
+    assert loader.requested == ["sv_core_news_md", "en_core_web_md"]
 
 
 def test_a_missing_model_falls_back_to_the_default(capsys: pytest.CaptureFixture[str]) -> None:
-    """No seat has sv_core_news_sm yet — this must degrade, not raise."""
-    loader = _Loader(missing={"sv_core_news_sm"})
+    """No seat has sv_core_news_md yet — this must degrade, not raise."""
+    loader = _Loader(missing={"sv_core_news_md"})
     extractor = SpacyNerLlmExtractor(model_loader=loader)
 
     result = extractor.extract(SWEDISH)
 
-    assert loader.requested == ["sv_core_news_sm", "en_core_web_sm"]
+    assert loader.requested == ["sv_core_news_md", "en_core_web_md"]
     assert result.entities == ()
-    assert "sv_core_news_sm" in capsys.readouterr().err
+    assert "sv_core_news_md" in capsys.readouterr().err
 
 
 def test_the_missing_model_warning_is_not_repeated(capsys: pytest.CaptureFixture[str]) -> None:
     """One warning per process, not one per ingested document."""
-    extractor = SpacyNerLlmExtractor(model_loader=_Loader(missing={"sv_core_news_sm"}))
+    extractor = SpacyNerLlmExtractor(model_loader=_Loader(missing={"sv_core_news_md"}))
     extractor.extract(SWEDISH)
     capsys.readouterr()
 
@@ -110,9 +110,9 @@ def test_the_missing_model_warning_is_not_repeated(capsys: pytest.CaptureFixture
 def test_a_missing_default_model_propagates() -> None:
     """Falling back to a model that is also absent is a real failure."""
     extractor = SpacyNerLlmExtractor(
-        model_loader=_Loader(missing={"sv_core_news_sm", "en_core_web_sm"})
+        model_loader=_Loader(missing={"sv_core_news_md", "en_core_web_md"})
     )
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="spacy download en_core_web_md"):
         extractor.extract(SWEDISH)
 
 
@@ -164,14 +164,14 @@ _HAS_SV = _HAS_EN = False
 try:  # pragma: no cover - depends on which models the machine has
     import spacy
 
-    spacy.load("sv_core_news_sm")
+    spacy.load("sv_core_news_md")
     _HAS_SV = True
 except Exception:  # noqa: BLE001 - spacy or the model is absent
     pass
 try:  # pragma: no cover
     import spacy
 
-    spacy.load("en_core_web_sm")
+    spacy.load("en_core_web_md")
     _HAS_EN = True
 except Exception:  # noqa: BLE001
     pass

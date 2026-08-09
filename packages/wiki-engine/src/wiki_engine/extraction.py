@@ -111,12 +111,16 @@ class SpacyNerLlmExtractor:
     def _load_spacy(self, model: str) -> tuple[Any, str]:
         """Load and cache ``model``; return it with the model actually used.
 
-        No seat has sv_core_news_sm installed yet, so a missing model has to
+        Seats currently carry neither md model, so a missing model has to
         degrade rather than break ingest on every Swedish document. The caller
         needs the model that was *actually* loaded, not the one asked for —
         after a fallback the labels are the fallback's, and normalising them as
-        Swedish would corrupt every entity type. A failure to load the fallback
-        itself is a real misconfiguration and propagates.
+        Swedish would corrupt every entity type.
+
+        A failure to load the *fallback* is a real misconfiguration and
+        propagates: silently extracting nothing would be worse than stopping.
+        spaCy's own E050 does not say which command fixes it, so the message is
+        re-raised with one that does.
         """
         if model in self._nlp_by_model:
             return self._nlp_by_model[model]
@@ -124,9 +128,13 @@ class SpacyNerLlmExtractor:
         fallback = SPACY_MODELS[self._default_language]
         try:
             resolved = (self._load_model(model), model)
-        except OSError:
+        except OSError as exc:
             if model == fallback:
-                raise
+                raise OSError(
+                    f"spaCy model {model!r} is not installed, and it is the fallback for "
+                    f"default_language={self._default_language!r}, so there is nothing to "
+                    f"degrade to. Install it with: python -m spacy download {model}"
+                ) from exc
             if model not in self._warned_models:
                 self._warned_models.add(model)
                 _warn(f"spaCy model {model!r} is not installed; falling back to {fallback!r}")

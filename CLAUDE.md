@@ -106,15 +106,23 @@ Postgres. `WIKI_REPO_PATH` selects the repo.
 
 ### Bilingual NER (`language.py`)
 Seats declare `languages: [sv, en]`, so `SpacyNerLlmExtractor` detects each
-document's language and loads `sv_core_news_sm` or `en_core_web_sm` rather than
+document's language and loads `sv_core_news_md` or `en_core_web_md` rather than
 always English. Detection is a deliberate zero-dependency heuristic (diacritics
 + disjoint stopword sets) — the sv/en decision is binary, and the engine core
 stays installable with no extras. Both models' labels are normalised to one
 canonical vocabulary so the graph holds one type per real-world concept;
-`canonical_entity_type` owns that map. **A missing model degrades to the default
-language with one warning** — no seat has `sv_core_news_sm` yet, so without that
-fallback every Swedish ingest would fail. Detection is weakest on very short
-text, which includes query-time extraction in `retrieval.py`.
+`canonical_entity_type` owns that map. A missing model degrades to the default
+language with one warning; a missing *default* model raises, since there is
+nothing left to degrade to.
+
+⚠️ **Both seats currently have only `en_core_web_sm`.** The `md` tier is chosen
+because Swedish NER scores F1 0.95 on it against 0.75 on `sm` — but until the
+wiki-mcp playbook in exale-infra downloads `en_core_web_md` and
+`sv_core_news_md`, fact extraction on a seat will raise rather than degrade.
+Ship the playbook change first. Model sizes: 54 MB + 72 MB per seat.
+
+Detection is weakest on very short text, which includes query-time extraction in
+`retrieval.py`.
 
 ## Local deployment (native, no Docker)
 

@@ -61,7 +61,7 @@ Tests inject deterministic fakes (`fakes.py`). The engine never calls an LLM API
 
 Seats are bilingual, so `language.py` detects the language of each document —
 a zero-dependency `sv`/`en` heuristic — and `SpacyNerLlmExtractor` loads the
-matching model (`sv_core_news_sm` or `en_core_web_sm`). Both models' NER labels
+matching model (`sv_core_news_md` or `en_core_web_md`). Both models' NER labels
 are normalised onto one canonical vocabulary (`PRS` and `PERSON` both become
 `PERSON`), so a Swedish page and an English one about the same person meet as
 one entity type in the graph. A model that is not installed degrades to the

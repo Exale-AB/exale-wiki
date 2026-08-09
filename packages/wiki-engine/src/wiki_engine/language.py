@@ -36,8 +36,8 @@ DEFAULT_LANGUAGE: Final = "en"
 
 SPACY_MODELS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "en": "en_core_web_sm",
-        "sv": "sv_core_news_sm",
+        "en": "en_core_web_md",
+        "sv": "sv_core_news_md",
     }
 )
 
@@ -257,8 +257,8 @@ def detect_language(text: str, default: str = DEFAULT_LANGUAGE) -> str:
 
 # --- canonical entity types --------------------------------------------------
 
-# The two models speak different vocabularies: en_core_web_sm emits 18 labels,
-# sv_core_news_sm 8. Storing them raw would leave the knowledge graph holding
+# The two models speak different vocabularies: en_core_web_md emits 18 labels,
+# sv_core_news_md 8. Storing them raw would leave the knowledge graph holding
 # PERSON and PRS as unrelated vertex types, so conflict detection and graph
 # queries would never connect a Swedish page to an English one about the same
 # person. Both are mapped onto one canonical set at extraction time.
