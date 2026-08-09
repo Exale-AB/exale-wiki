@@ -131,7 +131,8 @@ def test_relation_extraction_with_stub_llm():
     extractor = SpacyNerLlmExtractor(llm_client=_StubChatClient(canned))
 
     entities = (Entity("Acme Corp", "ORG"), Entity("WidgetCo", "ORG"))
-    facts = extractor._extract_relations("Acme Corp acquired WidgetCo.", entities)
+    facts, failed = extractor._extract_relations("Acme Corp acquired WidgetCo.", entities)
+    assert failed is False
     assert len(facts) == 1
     assert facts[0].head == "Acme Corp"
     assert facts[0].relation == "acquired"

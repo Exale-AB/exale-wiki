@@ -46,6 +46,12 @@ class Fact(NamedTuple):
 class ExtractedFacts:
     entities: tuple[Entity, ...]
     facts: tuple[Fact, ...]
+    # True when relation extraction *failed* rather than finding nothing. The two
+    # were indistinguishable before, so callers could not tell a timed-out page
+    # from one with no relations, and reindex_facts had to preserve stale records
+    # on both. Defaults to False so existing FactExtractor implementations and
+    # every ExtractedFacts(...) call site keep working unchanged.
+    relations_failed: bool = False
 
 
 @runtime_checkable
