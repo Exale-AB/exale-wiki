@@ -139,3 +139,122 @@ def test_the_body_survives_a_clearing_run(repo: WikiRepo) -> None:
     reindex_facts(repo, _Extractor(), force=True)
 
     assert _page(repo).body.strip() == "body"
+
+
+# --- per-section extraction preserves attribution (#21 phase 3) --------------
+
+SECTIONED_BODY = """\
+## 2026-03-01 — msg-1
+
+First source text.
+
+## 2026-03-04 — msg-2
+
+Second source text.
+"""
+
+
+class _PerSection:
+    """Extracts a distinct fact per section; can fail on a chosen call."""
+
+    def __init__(self, fail_on: int | None = None) -> None:
+        self.calls = 0
+        self.seen: list[str] = []
+        self._fail_on = fail_on
+
+    def extract(self, text: str) -> ExtractedFacts:
+        self.calls += 1
+        self.seen.append(text)
+        if self.calls == self._fail_on:
+            return ExtractedFacts(entities=(), facts=(), relations_failed=True)
+        n = self.calls
+        return ExtractedFacts(
+            entities=(Entity(f"E{n}", "ORG"),),
+            facts=(Fact(f"E{n}", "rel", f"T{n}", "ORG", "ORG"),),
+        )
+
+
+@pytest.fixture
+def sectioned(tmp_path: Path) -> WikiRepo:
+    repo = WikiRepo(tmp_path / "wiki")
+    repo.init(tmp_path / "wiki")
+    repo.write_page(
+        Page(
+            slug="a",
+            frontmatter={"title": "a", "sources": ["msg-1", "msg-2"], "facts": [STALE_FACT]},
+            body=SECTIONED_BODY,
+        )
+    )
+    return repo
+
+
+def test_each_section_is_extracted_separately(sectioned: WikiRepo) -> None:
+    """A whole-body pass would flatten the attribution ingest establishes."""
+    extractor = _PerSection()
+
+    reindex_facts(sectioned, extractor, force=True)
+
+    assert extractor.calls == 2
+    assert "First source text." in extractor.seen[0]
+    assert "Second source text." in extractor.seen[1]
+
+
+def test_records_are_attributed_to_their_section(sectioned: WikiRepo) -> None:
+    reindex_facts(sectioned, _PerSection(), force=True)
+
+    facts = _page(sectioned).frontmatter["facts"]
+    assert [f["source"] for f in facts] == ["msg-1", "msg-2"]
+
+
+def test_one_failed_section_keeps_only_its_own_records(sectioned: WikiRepo) -> None:
+    """The other section still converts; the page is written, not skipped."""
+    result = reindex_facts(sectioned, _PerSection(fail_on=2), force=True)
+
+    facts = _page(sectioned).frontmatter["facts"]
+    assert [f["source"] for f in facts] == ["msg-1"]
+    assert result.processed == 1
+    assert result.partial == 1
+    assert result.failed == 0
+
+
+class _AllFail:
+    def extract(self, text: str) -> ExtractedFacts:
+        return ExtractedFacts(entities=(), facts=(), relations_failed=True)
+
+
+def test_a_page_where_every_section_fails_is_left_untouched(sectioned: WikiRepo) -> None:
+    path = sectioned.wiki_dir / "a.md"
+    before = path.read_text(encoding="utf-8")
+
+    result = reindex_facts(sectioned, _AllFail(), force=True)
+
+    assert path.read_text(encoding="utf-8") == before
+    assert result.failed == 1
+    assert result.processed == 0
+
+
+def test_an_unsectioned_page_is_attributed_to_its_first_source(tmp_path: Path) -> None:
+    """Legacy pages gain attribution the first time they are reindexed."""
+    repo = WikiRepo(tmp_path / "wiki")
+    repo.init(tmp_path / "wiki")
+    repo.write_page(
+        Page(slug="a", frontmatter={"title": "a", "sources": ["msg-1"]}, body="Plain body.")
+    )
+
+    reindex_facts(repo, _PerSection(), force=True)
+
+    facts = _page(repo).frontmatter["facts"]
+    assert [f["source"] for f in facts] == ["msg-1"]
+
+
+def test_a_page_with_no_sources_still_works(tmp_path: Path) -> None:
+    """Pages filed by `query` cite nothing; there is nothing to attribute to."""
+    repo = WikiRepo(tmp_path / "wiki")
+    repo.init(tmp_path / "wiki")
+    repo.write_page(Page(slug="a", frontmatter={"title": "a"}, body="Plain body."))
+
+    reindex_facts(repo, _PerSection(), force=True)
+
+    facts = _page(repo).frontmatter["facts"]
+    assert len(facts) == 1
+    assert "source" not in facts[0]

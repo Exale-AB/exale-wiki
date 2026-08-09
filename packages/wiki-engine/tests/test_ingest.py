@@ -9,6 +9,7 @@ from wiki_engine.ingest import IngestResult, ingest
 from wiki_engine.log import parse_log
 from wiki_engine.repo import WikiRepo
 from wiki_engine.schema import PageTypeRule, WikiSchema
+from wiki_engine.sections import parse_sections
 from wiki_engine.source import Source, SourceKind
 
 
@@ -70,8 +71,12 @@ def test_ingest_document_category_stores_full_text_verbatim(tmp_path: Path):
     )
     page = repo.read_page("acme-renewal")
     assert page is not None
-    assert page.body.strip() == "Acme renewed for Q3.\nDetails follow."
-    assert not page.body.startswith("Summary of")
+    # The body now carries one section per source; the verbatim text must
+    # survive intact inside it, untouched by the summarizer.
+    section = parse_sections(page.body)[0]
+    assert section.identifier == "msg-1"
+    assert section.text == "Acme renewed for Q3.\nDetails follow."
+    assert "Summary of" not in page.body
 
 
 def test_ingest_custom_verbatim_category_stores_full_text(tmp_path: Path):
@@ -84,7 +89,7 @@ def test_ingest_custom_verbatim_category_stores_full_text(tmp_path: Path):
     )
     page = repo.read_page("acme-renewal")
     assert page is not None
-    assert page.body.strip() == "Acme renewed for Q3.\nDetails follow."
+    assert parse_sections(page.body)[0].text == "Acme renewed for Q3.\nDetails follow."
 
 
 def test_ingest_non_verbatim_category_still_summarizes(tmp_path: Path):
@@ -97,7 +102,9 @@ def test_ingest_non_verbatim_category_still_summarizes(tmp_path: Path):
     )
     page = repo.read_page("acme-renewal")
     assert page is not None
-    assert page.body.startswith("Summary of Acme Renewal")
+    section = parse_sections(page.body)[0]
+    assert section.identifier == "msg-1"
+    assert section.text.startswith("Summary of Acme Renewal")
     assert "Details follow." not in page.body
 
 
@@ -398,3 +405,101 @@ def test_ingest_without_extractor_has_no_facts(tmp_path: Path):
     assert page is not None
     assert "entities" not in page.frontmatter
     assert "facts" not in page.frontmatter
+
+
+# --- re-ingest accumulates rather than replaces (#21) ------------------------
+
+
+class _CannedExtractor:
+    """Yields a fact per call; the third call simulates a timeout."""
+
+    def __init__(self, fail_on: int | None = None) -> None:
+        self.calls = 0
+        self._fail_on = fail_on
+
+    def extract(self, text: str):
+        from wiki_engine.protocols import Entity, ExtractedFacts, Fact
+
+        self.calls += 1
+        if self.calls == self._fail_on:
+            return ExtractedFacts(entities=(), facts=(), relations_failed=True)
+        n = self.calls
+        return ExtractedFacts(
+            entities=(Entity(f"E{n}", "ORG"),),
+            facts=(Fact(f"E{n}", "rel", f"T{n}", "ORG", "ORG"),),
+        )
+
+
+def _ingest_two(tmp_path: Path, extractor) -> WikiRepo:
+    repo = _repo(tmp_path)
+    for ident, text in (("msg-1", "First source text."), ("msg-2", "Second source text.")):
+        ingest(
+            _source(identifier=ident, text=text),
+            repo=repo,
+            schema=WikiSchema(),
+            summarizer=FakeSummarizer(),
+            extractor=extractor,
+        )
+    return repo
+
+
+def test_both_sources_survive_in_the_body(tmp_path: Path):
+    """The defect: the page claimed two sources and contained only the second."""
+    repo = _ingest_two(tmp_path, _CannedExtractor())
+
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    assert [s.identifier for s in parse_sections(page.body)] == ["msg-1", "msg-2"]
+    assert "First source text." in page.body
+    assert "Second source text." in page.body
+
+
+def test_both_sources_facts_survive(tmp_path: Path):
+    repo = _ingest_two(tmp_path, _CannedExtractor())
+
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    facts = page.frontmatter["facts"]
+    assert {f["source"] for f in facts} == {"msg-1", "msg-2"}
+
+
+def test_a_failed_extraction_keeps_the_other_sources_facts(tmp_path: Path):
+    """Issue #21 itself, now falling out of the merge."""
+    repo = _ingest_two(tmp_path, _CannedExtractor(fail_on=2))
+
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    facts = page.frontmatter["facts"]
+    assert [f["source"] for f in facts] == ["msg-1"]
+    # ...and the failed source still contributed its body section.
+    assert [s.identifier for s in parse_sections(page.body)] == ["msg-1", "msg-2"]
+
+
+def test_re_ingesting_one_source_replaces_only_its_own_section(tmp_path: Path):
+    repo = _repo(tmp_path)
+    extractor = _CannedExtractor()
+    for text in ("Original text.", "Revised text."):
+        ingest(
+            _source(identifier="msg-1", text=text),
+            repo=repo,
+            schema=WikiSchema(),
+            summarizer=FakeSummarizer(),
+            extractor=extractor,
+        )
+
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    sections = parse_sections(page.body)
+    assert len(sections) == 1
+    assert "Revised text." in sections[0].text
+    assert "Original text." not in page.body
+    assert len(page.frontmatter["facts"]) == 1
+
+
+def test_the_sources_list_and_the_sections_agree(tmp_path: Path):
+    """The invariant the whole change establishes."""
+    repo = _ingest_two(tmp_path, _CannedExtractor())
+
+    page = repo.read_page("acme-renewal")
+    assert page is not None
+    assert page.frontmatter["sources"] == [s.identifier for s in parse_sections(page.body)]

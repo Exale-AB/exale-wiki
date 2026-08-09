@@ -82,6 +82,24 @@ themselves and wrote different files, and nothing ever read the CLI's copy. It
 accumulated stale vertices indefinitely and reappeared on every run after being deleted.
 `prune_legacy_graph()` removes the orphan and both entry points call it.
 
+### Pages accumulate per source (`sections.py`, `records.py`)
+A page body holds **one section per source**, headed `## <date> — <identifier>`, and
+every entity/fact record carries `source: <identifier>`. `ingest` used to write the
+newest source's summary as the *whole* body and replace all records, so a page
+claiming `sources: [a, b]` contained only `b` — on every re-ingest, not just a failed
+one (#21).
+
+Only headings matching that pattern are section boundaries; a verbatim document's own
+`## Terms` is content. `chunk.py` already splits on headings, so retrieval gets
+per-source chunks and citations for free.
+
+A body with no section heading predates this and is adopted as an anonymous first
+section rather than rewritten. Records with no `source` are treated as belonging to
+the page's first cited source, and are tagged the first time the page is touched.
+
+`reindex_facts` extracts **per section** for the same reason — a whole-body pass would
+flatten the attribution.
+
 ### The three operations
 - **ingest** (`ingest.py`): source → summary page + index/log updates. Idempotent via
   `Source.identity()` (sha256 of kind+identifier+text); skips already-seen sources and
