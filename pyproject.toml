@@ -47,6 +47,10 @@ dev = [
 # --- Lint & format -----------------------------------------------------------
 [tool.ruff]
 line-length = 100
+# ruff 0.16 began formatting code blocks inside markdown. This repo's markdown
+# is prose and illustrative snippets — design notes quote code from other repos
+# and from the papers they port from — so formatting them is churn, not hygiene.
+extend-exclude = ["*.md"]
 target-version = "py311"
 src = ["packages"]
 

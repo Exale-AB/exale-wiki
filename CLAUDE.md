@@ -161,7 +161,7 @@ pointing at what replaced it, and the currency checks skip it.
 
 ## Gotchas
 
-- **Dev-tool pins are exact** (`ruff==0.15.17`, `pyright==1.1.410`) so output is stable
+- **Dev-tool pins are exact** (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
   across machines; bump them deliberately. The full gate is green: `uv run pytest`,
   `ruff check`, `ruff format --check`, and `pyright` (0 errors — only a benign
   `reportMissingModuleSource` warning for the optional, lazily-imported `requests` in
