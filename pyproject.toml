@@ -33,8 +33,8 @@ dev = [
     # ruff and pyright are pinned exactly: their lint/format/type output changes
     # between releases, so a loose floor lets a from-scratch `uv sync` pull a
     # stricter version and surface new findings. Bump these deliberately.
-    "ruff==0.16.1",
-    "pyright==1.1.411",
+    "ruff==0.16.6",
+    "pyright==1.1.414",
     "types-pyyaml>=6.0.12.20260724",  # type stubs for PyYAML (pyright)
     # Members are installed editable into the shared venv so tests and
     # coverage see them by their import names. wiki-engine[llm] pulls openai so
