@@ -6,7 +6,7 @@ organised in three layers (`raw/` sources, `wiki/` pages, `schema/` rulebook) wi
 three core operations (ingest / query / lint) and a knowledge-graph layer for
 entity-aware retrieval and conflict detection.
 
-**269 tests · 89.5% coverage · Python 3.11 · ruff + pyright clean**
+**535 tests · 90.4% coverage · Python 3.11 · ruff + pyright clean**
 
 ## Architecture
 
@@ -98,7 +98,9 @@ Three ranked signals merged via RRF (`score = Σ 1/(60 + rank)`):
 
 ### Knowledge graph
 
-`WikiGraph` (igraph-backed, persisted as GraphML) with four vertex types:
+`WikiGraph` (igraph-backed, persisted as GraphML at `repo.graph_path` — the repo root,
+beside `wiki/`, since the graph is derived and rebuildable from page frontmatter) with
+four vertex types:
 `entity`, `fact`, `schema`, `passage`. Supports conflict detection (grouping facts
 by normalised `(head, relation)` to find contradictory tails) and Personalized
 PageRank for graph-enhanced retrieval.
