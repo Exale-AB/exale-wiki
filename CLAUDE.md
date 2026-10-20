@@ -100,6 +100,17 @@ the page's first cited source, and are tagged the first time the page is touched
 `reindex_facts` extracts **per section** for the same reason — a whole-body pass would
 flatten the attribution.
 
+### Frontmatter is untrusted input (`records.coerce_text`, `facts_from_frontmatter`)
+`WikiGraph.rebuild` runs at MCP startup over every page, so one bad record used to
+kill the server ("connection closed", nothing else in the host log). YAML resolves an
+unquoted `2026-10-13` to a date and `[member]` to a list; `.strip()` on either raised.
+The writer (`yaml.safe_dump`) already quotes such strings, so the bad values come from
+hand-edited or externally written pages, or from a model answering `"head": ["member"]`
+(`_parse_relations` now coerces or drops those). The reader goes through
+`facts_from_frontmatter`, which coerces dates/numbers/scalar lists and skips any record
+it cannot read with a stderr warning naming the page. `rebuild` and the MCP per-ingest
+update share it; do not re-inline `e["text"]` access.
+
 ### The three operations
 - **ingest** (`ingest.py`): source → summary page + index/log updates. Idempotent via
   `Source.identity()` (sha256 of kind+identifier+text); skips already-seen sources and

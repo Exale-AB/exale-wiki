@@ -410,27 +410,15 @@ def handle_wiki_resolve_conflicts(
 
 def _update_graph_for_page(graph: Any, repo: Any, slug: str) -> None:
     """Update the knowledge graph for a single page after ingest."""
-    from .protocols import Entity, ExtractedFacts, Fact
+    from .knowledge_graph import facts_from_frontmatter
 
     page = repo.read_page(slug)
     if page is None:
         return
-    entities_raw = page.frontmatter.get("entities", [])
-    facts_raw = page.frontmatter.get("facts", [])
-    if not entities_raw and not facts_raw:
+    extracted = facts_from_frontmatter(slug, page.frontmatter)
+    if not extracted.entities and not extracted.facts:
         return
-    entities = tuple(Entity(text=e["text"], entity_type=e["entity_type"]) for e in entities_raw)
-    facts = tuple(
-        Fact(
-            head=f["head"],
-            relation=f["relation"],
-            tail=f["tail"],
-            head_type=f["head_type"],
-            tail_type=f["tail_type"],
-        )
-        for f in facts_raw
-    )
-    graph.update(slug, ExtractedFacts(entities=entities, facts=facts))
+    graph.update(slug, extracted)
     graph.save()
 
 

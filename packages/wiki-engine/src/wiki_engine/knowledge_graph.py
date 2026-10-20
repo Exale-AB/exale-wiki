@@ -6,13 +6,15 @@ Memgraphrag (igraph construction, PPR retrieval).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import igraph as ig  # type: ignore[import-untyped]
 
 from .protocols import Entity, ExtractedFacts, Fact
+from .records import coerce_text
 
 # The reindex CLI used to write the graph here, inside the content directory.
 # Nothing ever read it back except the next CLI run, which accumulated into it
@@ -20,7 +22,51 @@ from .protocols import Entity, ExtractedFacts, Fact
 # is the one true location now; this name exists only to clean up after the old one.
 LEGACY_GRAPH_FILENAME = "graph.graphml"
 
-__all__ = ["LEGACY_GRAPH_FILENAME", "WikiGraph", "prune_legacy_graph"]
+__all__ = ["LEGACY_GRAPH_FILENAME", "WikiGraph", "facts_from_frontmatter", "prune_legacy_graph"]
+
+_ENTITY_KEYS = ("text", "entity_type")
+_FACT_KEYS = ("head", "relation", "tail", "head_type", "tail_type")
+
+
+def _warn(message: str) -> None:
+    print(f"[wiki_engine.knowledge_graph] {message}", file=sys.stderr, flush=True)
+
+
+def _read_records(slug: str, kind: str, raw: Any, keys: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """The usable records under one frontmatter key, as tuples in `keys` order.
+
+    Frontmatter is hand-editable and model-written, so every field is untrusted.
+    This runs at server startup for every page: one malformed record must cost
+    that record, not the process, so each skip is a warning that names the page.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        _warn(f"{slug}: ignoring {kind}: expected a list, got {type(raw).__name__}")
+        return []
+    usable: list[tuple[str, ...]] = []
+    for record in raw:
+        values = [coerce_text(record.get(k)) for k in keys] if isinstance(record, Mapping) else None
+        if values is None or None in values:
+            _warn(f"{slug}: skipping unusable {kind} record: {record!r}")
+            continue
+        usable.append(tuple(v for v in values if v is not None))
+    return usable
+
+
+def facts_from_frontmatter(slug: str, frontmatter: Mapping[str, Any]) -> ExtractedFacts:
+    """Entities and facts recorded in a page's frontmatter, tolerant of bad values.
+
+    The one place frontmatter becomes graph input; `WikiGraph.rebuild` and the MCP
+    server's per-ingest update both go through it.
+    """
+    entities = tuple(
+        Entity(*r) for r in _read_records(slug, "entity", frontmatter.get("entities"), _ENTITY_KEYS)
+    )
+    facts = tuple(
+        Fact(*r) for r in _read_records(slug, "fact", frontmatter.get("facts"), _FACT_KEYS)
+    )
+    return ExtractedFacts(entities=entities, facts=facts)
 
 
 def prune_legacy_graph(repo: Any) -> Path | None:
@@ -211,23 +257,9 @@ class WikiGraph:
         """Rebuild graph from page frontmatter. Returns vertex count."""
         self._g = ig.Graph(directed=True)
         for page in repo.list_pages():
-            entities_raw = page.frontmatter.get("entities", [])
-            facts_raw = page.frontmatter.get("facts", [])
-            entities = tuple(
-                Entity(text=e["text"], entity_type=e["entity_type"]) for e in entities_raw
-            )
-            facts = tuple(
-                Fact(
-                    head=f["head"],
-                    relation=f["relation"],
-                    tail=f["tail"],
-                    head_type=f["head_type"],
-                    tail_type=f["tail_type"],
-                )
-                for f in facts_raw
-            )
-            if entities or facts:
-                self.update(page.slug, ExtractedFacts(entities=entities, facts=facts))
+            extracted = facts_from_frontmatter(page.slug, page.frontmatter)
+            if extracted.entities or extracted.facts:
+                self.update(page.slug, extracted)
         return self._g.vcount()
 
     def save(self) -> None:
