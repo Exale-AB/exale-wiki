@@ -12,7 +12,7 @@ markdown in a git repo.**
 ![coverage gate 80%](https://img.shields.io/badge/coverage-%E2%89%A580%25-brightgreen)
 [![license: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-**582 tests · 90.4% coverage · ruff + pyright clean**
+**611 tests · 91.1% coverage · ruff + pyright clean**
 
 ## What is this?
 
