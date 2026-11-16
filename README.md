@@ -100,34 +100,127 @@ whole API surface in one place. It is run by the test suite, so it will not go s
 The engine ships an MCP server that exposes the wiki to any agent as tools. It speaks
 JSON-RPC over stdin/stdout and is exercised against [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) from Nous Research.
 
-```bash
-# install the engine plus the optional pieces you want
-pip install "wiki-engine[llm,extraction] @ git+https://github.com/Exale-AB/exale-wiki#subdirectory=packages/wiki-engine"
-
-WIKI_REPO_PATH=/path/to/my-wiki python -m wiki_engine
-```
-
-With Hermes Agent, register it as an MCP server:
+Create a wiki once. The server serves an existing wiki and does not create one, so a
+missing `raw/`, `wiki/` and `schema/` shows up as a file-not-found error on first use:
 
 ```bash
-hermes mcp add wiki-engine --command /path/to/wiki-mcp-server.sh
-hermes mcp test wiki-engine
+git init ~/my-wiki
+uv run python -c "from pathlib import Path; from wiki_engine import WikiRepo; WikiRepo.init(Path.home() / 'my-wiki')"
 ```
 
-Here the script is a small wrapper that sets `WIKI_REPO_PATH` and runs
-`python -m wiki_engine`. For other MCP clients, an entry looks like this:
+Run that from your clone of this repo (after `uv sync`). The server then starts with:
+
+```bash
+WIKI_REPO_PATH=~/my-wiki uv run --directory /path/to/exale-wiki python -m wiki_engine
+```
+
+It also installs with `pip install "wiki-engine[llm,extraction] @ git+https://github.com/Exale-AB/exale-wiki#subdirectory=packages/wiki-engine"`,
+after which `python -m wiki_engine` is the command; use that interpreter's absolute path
+in the configs below.
+
+### Connect it to your agent
+
+The server is plain MCP over stdio, so any MCP client can use it. Every client needs the
+same three things: a **name** (`wiki-engine`), a **command** that starts the server, and
+the **`WIKI_REPO_PATH`** of your wiki. Use absolute paths — clients launch the command
+without your shell's `PATH` or working directory.
+
+**Claude Code**
+
+```bash
+claude mcp add wiki-engine --scope user --env WIKI_REPO_PATH=$HOME/my-wiki -- \
+  uv run --directory /path/to/exale-wiki python -m wiki_engine
+```
+
+**Claude Desktop, Cursor and most JSON-configured clients** (the file is
+claude_desktop_config.json for Claude Desktop, `~/.cursor/mcp.json` for Cursor):
 
 ```json
 {
   "mcpServers": {
     "wiki-engine": {
-      "command": "python",
-      "args": ["-m", "wiki_engine"],
-      "env": { "WIKI_REPO_PATH": "/path/to/my-wiki" }
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/exale-wiki", "python", "-m", "wiki_engine"],
+      "env": { "WIKI_REPO_PATH": "/Users/you/my-wiki" }
     }
   }
 }
 ```
+
+**Codex CLI** — add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.wiki-engine]
+command = "uv"
+args = ["run", "--directory", "/path/to/exale-wiki", "python", "-m", "wiki_engine"]
+env = { WIKI_REPO_PATH = "/Users/you/my-wiki" }
+```
+
+**Hermes Agent** — register a small wrapper script:
+
+```bash
+#!/usr/bin/env bash
+export WIKI_REPO_PATH="$HOME/my-wiki"
+exec uv run --directory /path/to/exale-wiki python -m wiki_engine
+```
+
+```bash
+hermes mcp add wiki-engine --command /path/to/that-script.sh
+hermes mcp test wiki-engine
+```
+
+Gemini CLI and other clients follow the same shape as the JSON example. Config formats
+change between releases, so check your client's MCP documentation if a field differs.
+Whichever client you use, ask it to list its tools: you should see the eight `wiki_*`
+tools below.
+
+### Make your agent save what it learns
+
+Connecting the server only makes the tools *available*. The agent will not use them
+reliably until you tell it to. Put a rule like this in the agent's standing instructions:
+
+```markdown
+## Knowledge wiki
+
+You have long-term memory through the `wiki-engine` MCP server (the `wiki_*` tools).
+
+- Before answering anything about people, projects, customers, decisions or history,
+  call `wiki_context` (or `wiki_search`) first. Do not answer from memory when the wiki
+  may know.
+- Whenever you learn something durable — a decision, a preference, a fact, a process, a
+  contact, or the outcome of a task — save it with `wiki_ingest` before you finish.
+  Do not ask permission for routine facts.
+- Before ingesting, `wiki_search` for an existing page so you do not create duplicates.
+- Say which page slugs you relied on. Never present wiki text as your own recollection.
+- Never ingest secrets (passwords, API keys, tokens) or anything the user marks private.
+- If something the user says contradicts the wiki, tell them, then ingest the new fact.
+```
+
+Where that goes depends on the client:
+
+| Client | Put the rule in |
+|--------|-----------------|
+| Claude Code | `CLAUDE.md` in the project, or `~/.claude/CLAUDE.md` for every project |
+| Claude Desktop / claude.ai | The project's instructions, or your profile preferences |
+| Codex CLI | AGENTS.md in the project, or `~/.codex/AGENTS.md` |
+| Cursor | A rule file under `.cursor/rules/` |
+| Gemini CLI | GEMINI.md |
+| Hermes Agent | The agent's persona or system prompt, plus the [`SKILL.md`](SKILL.md) in this repo, which teaches it which tool to use when |
+
+A few things make it stick:
+
+- **Pre-approve the tools** so saving is not interrupted by a prompt each time. In Claude
+  Code, allow `mcp__wiki-engine__*` in your permissions; other clients have an equivalent
+  "always allow" setting.
+- **A rule is an instruction, not a guarantee.** Agents sometimes skip it. If you need
+  it enforced, use your client's hooks (for example a Claude Code `Stop` hook) to check
+  that a `wiki_ingest` happened.
+- **Share one wiki across agents** by pointing every client at the same `WIKI_REPO_PATH`.
+  Writes are serialised by a lock, and each ingest is a git commit, so you can see which
+  agent added what with `git log`.
+- **Point it at a model.** If no model endpoint is reachable, ingest does not fail: it
+  quietly falls back to a fake summary (the first line of the text), so pages are saved
+  but are thin. Set the `WIKI_LLM_*` variables, see [Configuration](#configuration).
 
 ### The tools your agent gets
 
