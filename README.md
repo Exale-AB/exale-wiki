@@ -132,7 +132,7 @@ uv run ruff format .         # format
 uv run pyright               # type-check
 ```
 
-Dev-tool pins are exact (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
+Dev-tool pins are exact (`ruff==0.17.3`, `pyright==1.1.414`) so output is stable
 across machines.
 
 `uv run pytest` also runs the docs harness (`tests/test_docs_harness.py`), which

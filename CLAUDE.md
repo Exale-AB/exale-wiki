@@ -238,7 +238,7 @@ pointing at what replaced it, and the currency checks skip it.
 - **`ExtractedFacts.relations_failed`** carries that distinction. It defaults to
   `False`, so external `FactExtractor` implementations need no change.
 
-- **Dev-tool pins are exact** (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
+- **Dev-tool pins are exact** (`ruff==0.17.3`, `pyright==1.1.414`) so output is stable
   across machines; bump them deliberately. The full gate is green: `uv run pytest`,
   `ruff check`, `ruff format --check`, and `pyright` (0 errors — only a benign
   `reportMissingModuleSource` warning for the optional, lazily-imported `requests` in
