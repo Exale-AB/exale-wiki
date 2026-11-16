@@ -13,11 +13,35 @@ predates attribution and is treated as belonging to the page's first source.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 
-__all__ = ["SOURCE_KEY", "merge_records", "records_for_source"]
+__all__ = ["SOURCE_KEY", "coerce_text", "merge_records", "records_for_source"]
 
 SOURCE_KEY = "source"
+
+
+def coerce_text(value: Any) -> str | None:
+    """The string a record field was meant to hold, or None if there isn't one.
+
+    YAML resolves an unquoted `2026-10-13` to a date and `[member]` to a list, so
+    frontmatter written by anything other than this engine's own dumper can hand
+    back non-strings for fields typed `str`. The intent is recoverable for dates,
+    numbers and lists of scalars. Bools, mappings and empties are not: `yes`
+    becoming `True` has lost the original text for good, so those are None and the
+    caller skips the record rather than invent a value.
+    """
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, datetime.date | int | float):
+        return value.isoformat() if isinstance(value, datetime.date) else str(value)
+    if isinstance(value, list | tuple) and value:
+        parts = [coerce_text(v) for v in value if not isinstance(v, list | tuple)]
+        if len(parts) == len(value) and all(parts):
+            return ", ".join(p for p in parts if p)
+    return None
 
 
 def _source_of(record: Any, first_source: str | None) -> str | None:

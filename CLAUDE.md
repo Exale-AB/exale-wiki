@@ -100,6 +100,17 @@ the page's first cited source, and are tagged the first time the page is touched
 `reindex_facts` extracts **per section** for the same reason — a whole-body pass would
 flatten the attribution.
 
+### Frontmatter is untrusted input (`records.coerce_text`, `facts_from_frontmatter`)
+`WikiGraph.rebuild` runs at MCP startup over every page, so one bad record used to
+kill the server ("connection closed", nothing else in the host log). YAML resolves an
+unquoted `2026-10-13` to a date and `[member]` to a list; `.strip()` on either raised.
+The writer (`yaml.safe_dump`) already quotes such strings, so the bad values come from
+hand-edited or externally written pages, or from a model answering `"head": ["member"]`
+(`_parse_relations` now coerces or drops those). The reader goes through
+`facts_from_frontmatter`, which coerces dates/numbers/scalar lists and skips any record
+it cannot read with a stderr warning naming the page. `rebuild` and the MCP per-ingest
+update share it; do not re-inline `e["text"]` access.
+
 ### The three operations
 - **ingest** (`ingest.py`): source → summary page + index/log updates. Idempotent via
   `Source.identity()` (sha256 of kind+identifier+text); skips already-seen sources and
@@ -227,7 +238,7 @@ pointing at what replaced it, and the currency checks skip it.
 - **`ExtractedFacts.relations_failed`** carries that distinction. It defaults to
   `False`, so external `FactExtractor` implementations need no change.
 
-- **Dev-tool pins are exact** (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable
+- **Dev-tool pins are exact** (`ruff==0.17.3`, `pyright==1.1.414`) so output is stable
   across machines; bump them deliberately. The full gate is green: `uv run pytest`,
   `ruff check`, `ruff format --check`, and `pyright` (0 errors — only a benign
   `reportMissingModuleSource` warning for the optional, lazily-imported `requests` in

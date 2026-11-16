@@ -252,7 +252,7 @@ uv run ruff format .         # format
 uv run pyright               # type-check
 ```
 
-Dev-tool pins are exact (`ruff==0.16.1`, `pyright==1.1.411`) so output is stable across
+Dev-tool pins are exact (`ruff==0.17.3`, `pyright==1.1.414`) so output is stable across
 machines. CI (`.github/workflows/ci.yml`) runs the same commands on every push, plus a
 gitleaks secret scan.
 

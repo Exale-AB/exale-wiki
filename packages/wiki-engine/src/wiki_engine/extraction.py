@@ -22,6 +22,7 @@ from .language import (
     language_for_model,
 )
 from .protocols import Entity, ExtractedFacts, Fact
+from .records import coerce_text
 
 if TYPE_CHECKING:
     from .llm_backends import _ChatClient
@@ -236,6 +237,11 @@ class SpacyNerLlmExtractor:
                 continue
             if not all(item.get(k) for k in required):
                 continue
+            # A model can answer `"head": ["member"]`. Persisting that puts a list
+            # where every reader expects a string.
+            head, relation, tail = (coerce_text(item[k]) for k in ("head", "relation", "tail"))
+            if head is None or relation is None or tail is None:
+                continue
             head_type = canonical_fact_type(item["head_type"])
             tail_type = canonical_fact_type(item["tail_type"])
             # An endpoint the entity pass would have thrown away should not
@@ -244,9 +250,9 @@ class SpacyNerLlmExtractor:
                 continue
             facts.append(
                 Fact(
-                    head=item["head"],
-                    relation=item["relation"],
-                    tail=item["tail"],
+                    head=head,
+                    relation=relation,
+                    tail=tail,
                     head_type=head_type,
                     tail_type=tail_type,
                 )
